@@ -35,7 +35,7 @@ jobs:
         uses: Nuitka/Nuitka-Action@main
         with:
           nuitka-version: main
-          script-name: viewer.py
+          script-name: cnv.py
           onefile: true
           enable-plugins: pyside6
 
