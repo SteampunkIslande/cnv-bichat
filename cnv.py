@@ -500,6 +500,7 @@ def cnv_script_karim(
 
     listOrdonneeAMP = []
     dictAmpliGene = {}
+    dictAmpliLocus = {}
     dictAmpliChr = {}
 
     for l_ordonnee in range(1, sheet_listOrdonnee.nrows):
@@ -512,12 +513,21 @@ def cnv_script_karim(
         dictAmpliGene[
             str(sheet_listOrdonnee.cell_value(l_ordonnee, 3)).replace(".0", "")
         ] = sheet_listOrdonnee.cell_value(l_ordonnee, 5)
+        dictAmpliLocus[
+            str(sheet_listOrdonnee.cell_value(l_ordonnee, 3)).replace(".0", "")
+        ] = (
+            sheet_listOrdonnee.cell_value(l_ordonnee, 0)
+            + ":"
+            + str(int(sheet_listOrdonnee.cell_value(l_ordonnee, 1)))
+            + "-"
+            + str(int(sheet_listOrdonnee.cell_value(l_ordonnee, 2)))
+        )
 
     print("NB. amplicon PANEL ::: ", len(listOrdonneeAMP))
 
     #
     ##### lire chaque fichier dans la liste et FAIRE la matrix de coverage
-    compteNbPatient = 1  ###☺ Nombre patient liste patient Attention EGAL 1 car il y a 2 colonne "gene et region_id" quand j'écris dans le matrix
+    compteNbPatient = 2  ###☺ Nombre patient liste patient Attention EGAL 2 car il y a 3 colonnes "gene, region_id, et locus" quand j'écris dans le matrix
     for i, monFichierMatrix in enumerate(filenameXLSX):
         compteNbPatient += 1
         print(
@@ -547,6 +557,11 @@ def cnv_script_karim(
             worksheetEntreCNV.write(
                 lesLignes, 1, ampli_LO
             )  ################ Remplir colonne AMPLICON
+            worksheetEntreCNV.write_formula(
+                lesLignes,
+                2,
+                f"""=HYPERLINK("localhost:60151/goto?locus={dictAmpliLocus[ampli_LO]}","{dictAmpliLocus[ampli_LO]}")""",
+            )  #####○ Ajouter un lien vers IGV
             worksheetEntreCNV.write(
                 lesLignes, compteNbPatient, int(dictPatientEnCours[ampli_LO])
             )  #####○ Remplir Total reads
@@ -645,9 +660,9 @@ def cnv_script_karim(
 
     cell_formatBLUE.set_font_color("blue")
 
-    numpatient = 2
-    varPat = 2
-    for i in range(2, feui_ALL.ncols):
+    numpatient = 3
+    varPat = 3
+    for i in range(3, feui_ALL.ncols):
 
         #####calcul dictRatio
         dictRatio = {}
@@ -853,9 +868,9 @@ def cnv_script_karim(
         worksheet_rg.write(0, 1, "Gene", bold)
 
     ########☻parcours les colonnes de mon fichier par patient
-    numPat = 2
-    numpatient = 2
-    for patientNum in range(2, feui_FMR.ncols):
+    numPat = 3
+    numpatient = 3
+    for patientNum in range(3, feui_FMR.ncols):
         dictRatioParGene = {}
         dictChromoso = {}
         for gene in listeNomGene:
