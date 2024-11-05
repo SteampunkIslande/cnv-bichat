@@ -7,21 +7,17 @@ Ajout d'une interface en ligne de commande.
 Suppression du code neutralisé par commentaires.
 Légère refactorisation du code.
 
+Mise à jour le 5 novembre 2024
+
+Refactorisation du code pour le rendre plus modulaire et plus facile à tester.
+
 """
 
 import os
 import sys
-
-reference_files = [
-    "listeCorrespondancePositionAmpliconGene.xlsx",
-    "GENEXUS_fichierOrdonneRegionStartGene_PanelAPHP.xlsx",
-    "fichierOrdonneRegionStartGene_PanelAPHP.xlsx",
-    "Moyenne_NormalizedRead_count_TemoinsPorphyriesGENEXUS.xlsx",
-]
-
-import json
-import os
 from pathlib import Path
+
+import duckdb as db
 
 from gui import main_gui
 
@@ -67,53 +63,24 @@ def main():
         "--reference-coverage-bed", help="Reference coverage bed file", type=Path
     )
     parser.add_argument(
-        "--keep-normalized-depth",
-        help="Keep normalized depth",
+        "--is-reference-run",
+        help="Outputs result as a reference BED file",
         action="store_true",
     )
     args = parser.parse_args()
 
-    entry_point(
-        args.input_files,
-        args.workdir,
-        args.design_bed,
-        args.duplication_threshold,
-        args.deletion_threshold,
-    )
+    if not args.is_reference_run:
+
+        call(
+            args.input_files,
+            args.workdir,
+            args.design_bed,
+            args.reference_coverage_bed,
+            args.duplication_threshold,
+            args.deletion_threshold,
+        )
 
     return 0
-
-
-def tsv_to_json(
-    input_filename: str | os.PathLike,
-    output_filename: str | os.PathLike,
-    key_column_name: str,
-    delimiter: str = "\t",
-):
-    """Transforms a tsv file into a json file, where the key is the value of the key_column_name column.
-    input_filename should be a tsv file with a header. Delimiter can be changed.
-    Output keys are the values of the key_column_name column, and the values are dictionaries with the column names as keys.
-
-    Args:
-        input_filename (str | os.PathLike): Path to input tsv file (with header)
-        output_filename (str | os.PathLike): Path to output json file
-        key_column_name (str): Name of the column to use as key
-        delimiter (str, optional): Input file delimiter. Defaults to "\t".
-    """
-    import csv
-    import json
-
-    with open(input_filename) as input_file:
-        reader = csv.DictReader(input_file, delimiter=delimiter)
-        d = {
-            field[key_column_name]: {
-                k: v for k, v in field.items() if k != key_column_name
-            }
-            for field in reader
-        }
-
-    with open(output_filename, "w") as output_file:
-        json.dump(d, output_file)
 
 
 def extract_amplicon_files_from_zip(
@@ -148,82 +115,84 @@ def extract_amplicon_files_from_zip(
     return written_files
 
 
-def entry_point(
-    input_files, workdir, design_bed, duplication_threshold, deletion_threshold
+def call(
+    input_files: list[Path],
+    workdir: Path,
+    design_bed: Path,
+    reference_coverage_bed_filename,
+    duplication_threshold,
+    deletion_threshold,
 ):
     os.makedirs(workdir, exist_ok=True)
-    for input_file in input_files:
-        input_file = Path(input_file)
-        if input_file.suffix == ".zip":
-            input_bed_filenames = [
-                workdir / "extracted" / p
-                for p in extract_amplicon_files_from_zip(
-                    input_file, os.path.join(workdir, "extracted")
-                )
-            ]
-            aggregate_samples_coverage(
-                input_bed_filenames, design_bed, workdir / "all_samples_coverage.tsv"
+    zip_files = [f for f in input_files if f.suffix == ".zip"]
+
+    # Any other file is considered an amplicon coverage file in bed format
+    bed_files = [f for f in input_files if f.suffix != ".zip"]
+
+    for input_zip_file in zip_files:
+        input_zip_file = Path(input_zip_file)
+        input_bed_filenames = [
+            workdir / "extracted" / p
+            for p in extract_amplicon_files_from_zip(
+                input_zip_file, os.path.join(workdir, "extracted")
             )
+        ]
+        cnv_call(
+            input_bed_filenames,
+            design_bed,
+            workdir,
+            reference_coverage_bed_filename,
+            duplication_threshold,
+            deletion_threshold,
+        )
+
+    if bed_files:
+        cnv_call(
+            bed_files,
+            design_bed,
+            workdir,
+            reference_coverage_bed_filename,
+            duplication_threshold,
+            deletion_threshold,
+        )
 
 
-def cnv_call(input_bed_filenames, design_bed_filename, reference_coverage_bed_filename):
+def build_normalized_coverage_bed(
+    coverage_bed_filename: Path,
+    sample_names: list[str],
+    design_bed_filename: Path,
+    output_filename: Path,
+):
     pass
+
+
+def cnv_call(
+    input_bed_filenames,
+    design_bed,
+    workdir,
+    reference_coverage_bed_filename,
+    duplication_threshold,
+    deletion_threshold,
+):
+    aggregate_samples_coverage(
+        input_bed_filenames, design_bed, workdir / "all_samples_coverage.tsv"
+    )
 
 
 def aggregate_samples_coverage(
     input_bed_filenames: list[Path], design_bed_filename: Path, output_filename: Path
 ):
-    input_bed_filenames = [Path(p) for p in input_bed_filenames]
-    for input_bed_filename in input_bed_filenames:
-        tsv_to_json(
-            input_bed_filename, input_bed_filename.with_suffix(".json"), "region_id"
-        )
-    if not os.path.exists(design_bed_filename.with_suffix(".json")):
-        # First time we see this design bed file
-        tsv_to_json(
-            design_bed_filename, design_bed_filename.with_suffix(".json"), "region_id"
-        )
+    input_bed_filenames = "[" + ", ".join([f"'{p}'" for p in input_bed_filenames]) + "]"
 
-    aggregate: dict[str, dict[str, str]] = {}
-
-    with open(design_bed_filename.with_suffix(".json")) as design_bed_file:
-        design_bed = json.load(design_bed_file)
-
-    patient_ids = [(p.stem, p) for p in input_bed_filenames]
-
-    input_patients_beds = {}
-    for patient_id, patient_bed_path in patient_ids:
-        with open(patient_bed_path.with_suffix(".json")) as input_bed_file:
-            input_bed: dict[str, dict[str, str]] = json.load(input_bed_file)
-        input_patients_beds[patient_id] = input_bed
-
-    for region_id in design_bed:
-        if region_id not in aggregate:
-            aggregate[region_id] = {}
-        aggregate[region_id]["gene"] = design_bed[region_id]["GENE"]
-        aggregate[region_id][
-            "locus"
-        ] = f'{design_bed[region_id]["contig_id"]}:{design_bed[region_id]["contig_srt"]}-{design_bed[region_id]["contig_end"]}'
-        for patient_id, patient_bed_path in patient_ids:
-            input_patient_bed = input_patients_beds[patient_id]
-            if region_id in input_patient_bed:
-                aggregate[region_id][patient_id] = input_patient_bed[region_id][
-                    "total_reads"
-                ]
-            else:
-                aggregate[region_id][patient_id] = 0
-
-    # Output aggregate to output_filename (as TSV)
-    with open(output_filename, "w") as output_file:
-        output_file.write("Gene\tregion_id")
-        for patient_id, _ in patient_ids:
-            output_file.write(f"\t{patient_id}")
-        output_file.write("\n")
-        for region_id, region_data in aggregate.items():
-            output_file.write(f"{region_data['gene']}\t{region_id}")
-            for patient_id, _ in patient_ids:
-                output_file.write(f"\t{region_data.get(patient_id, 0)}")
-            output_file.write("\n")
+    ref_table = db.sql(
+        f"SELECT row_number() OVER () AS index,contig_id as Chr,GENE as Gene,region_id AS AmpliconID FROM read_csv('{design_bed_filename}',sep='\t')"
+    )
+    cov_table = db.sql(
+        f"SELECT region_id,total_reads,parse_filename(filename,True) AS sample_name FROM read_csv({input_bed_filenames},sep='\t',filename=True,union_by_name=True)"
+    )
+    db.sql(
+        f"COPY (SELECT * EXCLUDE(index) FROM (PIVOT (SELECT ref.index,ref.Gene,ref.Chr,ref.AmpliconID,cov.total_reads,cov.sample_name FROM ref_table ref JOIN cov_table cov ON cov.region_id=ref.AmpliconID) ON sample_name USING first(total_reads) ) ORDER BY index) TO '{output_filename}' (DELIMITER '\t')"
+    )
 
 
 def cnv_script_karim(
@@ -247,6 +216,7 @@ def cnv_script_karim(
     import numpy
     import xlrd
     import xlsxwriter
+
     # Used to save the file as excel workbook
     # Need to install this library
     import xlwt
@@ -291,189 +261,6 @@ def cnv_script_karim(
     )
     if not os.path.exists(fichierTemoin):
         raise FileNotFoundError(fichierTemoin)
-
-    ####### Extraction dans le dossier Resultats des fichiers/dossiers contenus dans l'archive
-    with zipfile.ZipFile(input_zip, "r") as zip_ref:
-        zip_ref.extractall(os.path.join(workdir, "rawData_extractCNV"))
-
-    ###### Obtenir la liste des répertoireset DONC le NOM des patients
-    listeRepertoirePatients = os.listdir(os.path.join(workdir, "rawData_extractCNV"))
-
-    # print(listeRepertoirePatients)
-    # for i, repName in enumerate(listeRepertoirePatients):
-    #     full_dirname_before = os.path.join(workdir, "rawData_extractCNV", repName)
-    #     full_dirname_after = os.path.join(
-    #         workdir,
-    #         "rawData_extractCNV",
-    #         re.sub(r"^(AssayDev_\d*-?)?([^_]+)(_.+)?", r"\2", repName),
-    #     )
-    #     os.rename(full_dirname_before, full_dirname_after)
-
-    #     listeRepertoirePatients
-
-    # # J'ai (peut-être) renommé des dossiers, donc il faut refaire la liste des patients
-    # listeRepertoirePatients = os.listdir(os.path.join(workdir, "rawData_extractCNV"))
-
-    ##### lecture liste repertoire des patients
-    print("Les fichiers extraits... \n")
-
-    for i, listRepPatient in enumerate(listeRepertoirePatients):
-        ###### Obtenir liste des fichier dans le répertoire COURANT
-
-        listeFichierP_repertoire = glob.glob(
-            os.path.join(
-                workdir, "rawData_extractCNV", listRepPatient, "*.amplicon.cov.xls"
-            )
-        )
-
-        file_from = os.path.join(
-            workdir,
-            "rawData_extractCNV",
-            listRepPatient,
-            os.path.basename(listeFichierP_repertoire[0]),
-        )
-
-        file_to = os.path.join(
-            workdir,
-            "rawData_extractCNV",
-            listRepPatient + "." + os.path.basename(listeFichierP_repertoire[0]),
-        )
-
-        ######### Je deplace fichier coverage AMPLICON vers repo rawData et je renomme avec Patient ID
-        shutil.copy(file_from, file_to)
-
-        listeRepertoirePatients
-
-    #######################ICI fin du script extraction fichier .ZIP
-
-    #########################################################################################################################################
-    ###########################################################################################################################################
-    ### LECTURE all XLS files
-    xlsFilename = glob.glob(f"{workdir+'/rawData_extractCNV'}/*.xls")
-
-    print("\nNB. fichier DONNEES BRUTES :: ", len(xlsFilename))
-
-    ####### LECTURE DE MES FICHIERS CORROMPUS POUR "DE-CORROMPRE"
-    pID = 0
-    for i, chqFile in enumerate(xlsFilename):
-        ####-------------------------------------------------------------------------------------------------------------------------------------------
-        # Opening the file using 'utf-16' encoding
-        file1 = open(chqFile, "r")
-        data = file1.readlines()
-
-        # Creating a workbook object
-        xldoc = xlwt.Workbook()
-        # Adding a sheet to the workbook object
-        nomEchantillon = listeRepertoirePatients[pID]
-        sheet: xlwt.Worksheet = xldoc.add_sheet(
-            nomEchantillon, cell_overwrite_ok=True
-        )  ### Nom de la feuille Excel
-        # Iterating and saving the data to sheet
-        for i, row in enumerate(data):
-            # Two things are done here
-            # Removing the '\n' which comes while reading the file using open
-            # Getting the values after splitting using '\t'
-
-            for j, val in enumerate(row.replace("\n", "").split("\t")):
-                sheet.write(i, j, val)
-        pID += 1
-
-        xldoc.save(chqFile)
-
-    ##### LECTURE FICHIERS XLSX four faire mon fichier global d'entre script CNV
-    fichierEntreCNV: xlsxwriter.Workbook = xlsxwriter.Workbook(filePatientALL)
-    worksheetEntreCNV = fichierEntreCNV.add_worksheet("matrix_coverageALL")
-
-    #### Ecrire colonne zero et une
-    worksheetEntreCNV.write(0, 0, "Gene")
-    worksheetEntreCNV.write(0, 1, "region_id")
-
-    ###### LIRE TOUS LES FICHIERS PATIENTS xlsx
-    filenameXLSX = glob.glob(f"{workdir}/rawData_extractCNV/*.xls")
-
-    ##### FAIRE LA LISTE ORDONNEE AMPLICON les dictionnaires AMPLI-CHR et GENE
-
-    workbook_listOrdonnee: xlrd.Book = xlrd.open_workbook(fichierListeOrdonnee)
-    sheet_listOrdonnee = workbook_listOrdonnee.sheet_by_index(0)
-
-    listOrdonneeAMP = []
-    dictAmpliGene = {}
-    dictAmpliLocus = {}
-    dictAmpliChr = {}
-
-    for l_ordonnee in range(1, sheet_listOrdonnee.nrows):
-        listOrdonneeAMP.append(
-            str(sheet_listOrdonnee.cell_value(l_ordonnee, 3)).replace(".0", "")
-        )
-        dictAmpliChr[
-            str(sheet_listOrdonnee.cell_value(l_ordonnee, 3)).replace(".0", "")
-        ] = sheet_listOrdonnee.cell_value(l_ordonnee, 0)
-        dictAmpliGene[
-            str(sheet_listOrdonnee.cell_value(l_ordonnee, 3)).replace(".0", "")
-        ] = sheet_listOrdonnee.cell_value(l_ordonnee, 5)
-        dictAmpliLocus[
-            str(sheet_listOrdonnee.cell_value(l_ordonnee, 3)).replace(".0", "")
-        ] = (
-            sheet_listOrdonnee.cell_value(l_ordonnee, 0)
-            + ":"
-            + str(int(sheet_listOrdonnee.cell_value(l_ordonnee, 1)))
-            + "-"
-            + str(int(sheet_listOrdonnee.cell_value(l_ordonnee, 2)))
-        )
-
-    print("NB. amplicon PANEL ::: ", len(listOrdonneeAMP))
-
-    #
-    ##### lire chaque fichier dans la liste et FAIRE la matrix de coverage
-    compteNbPatient = 2  ###☺ Nombre patient liste patient Attention EGAL 2 car il y a 3 colonnes "gene, region_id, et locus" quand j'écris dans le matrix
-    for i, monFichierMatrix in enumerate(filenameXLSX):
-        compteNbPatient += 1
-        print(
-            "Patient :: ",
-            os.path.basename(monFichierMatrix).split(".")[0],
-        )  ####SPLIT "_IonDual" pour récuprer le NOM du PATIENT ")
-        monID_patient = os.path.basename(monFichierMatrix).split(".")[0]
-
-        #### Lecture XLSX file
-        myXLSX_workbook: xlrd.Book = xlrd.open_workbook(monFichierMatrix)
-        myXLSXsheet_1 = myXLSX_workbook.sheet_by_index(0)
-
-        ####### REMPLIR MA MATRICE FILE
-        worksheetEntreCNV.write(0, compteNbPatient, monID_patient)
-        #### dictionnaire du patient EN cours
-        dictPatientEnCours = {}
-        for ligneXLSX in range(1, myXLSXsheet_1.nrows):
-            dictPatientEnCours[myXLSXsheet_1.cell_value(ligneXLSX, 3)] = (
-                myXLSXsheet_1.cell_value(ligneXLSX, 9)
-            )  #### CREATION dict AMPLI-READS
-
-        lesLignes = 1
-        for ampli_LO in listOrdonneeAMP:
-            worksheetEntreCNV.write(
-                lesLignes, 0, dictAmpliGene[ampli_LO]
-            )  ################ Remplir colonne GENE (colonne zéro donc)
-            worksheetEntreCNV.write(
-                lesLignes, 1, ampli_LO
-            )  ################ Remplir colonne AMPLICON
-            worksheetEntreCNV.write_formula(
-                lesLignes,
-                2,
-                f"""=HYPERLINK("localhost:60151/goto?locus={dictAmpliLocus[ampli_LO]}","{dictAmpliLocus[ampli_LO]}")""",
-            )  #####○ Ajouter un lien vers IGV
-            worksheetEntreCNV.write(
-                lesLignes, compteNbPatient, int(dictPatientEnCours[ampli_LO])
-            )  #####○ Remplir Total reads
-            lesLignes += 1
-
-    fichierEntreCNV.close()
-
-    #######################################################################################################################################
-    ########################################################################################################################################
-    ######################################################################################################################################### CNV CNV CNV
-    ##########################################################################################################################################
-    ############################################################################################################################################
-
-    ####### A partir d'ici PRENDRE LE FICHIER GLOBAL DES COUVERTURES pour FILE Patients CNV du dessus
 
     f_ALL: xlrd.Book = xlrd.open_workbook(filePatientALL)
     feui_ALL = f_ALL.sheet_by_index(0)
