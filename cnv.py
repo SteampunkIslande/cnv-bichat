@@ -21,269 +21,15 @@ reference_files = [
 ]
 
 import json
+import os
 from pathlib import Path
 
-import PySide6.QtCore as qc
-import PySide6.QtGui as qg
-import PySide6.QtWidgets as qw
-
-
-def get_user_prefs_file():
-    return (
-        Path(
-            qc.QStandardPaths().writableLocation(
-                qc.QStandardPaths.StandardLocation.AppDataLocation
-            )
-        )
-        / "config.json"
-    ).resolve()
-
-
-def save_user_prefs(prefs: dict):
-
-    user_prefs = get_user_prefs_file()
-    print("Writing user prefs to", user_prefs)
-    if not user_prefs.parent.exists():
-        user_prefs.parent.mkdir(parents=True, exist_ok=True)
-    old_prefs = {}
-    if user_prefs.exists():
-        with open(user_prefs, "r", encoding="utf-8") as f:
-            old_prefs = json.load(f)
-
-    old_prefs.update(prefs)
-
-    with open(user_prefs, "w", encoding="utf-8") as f:
-        json.dump(old_prefs, f)
-
-
-def load_user_prefs():
-    user_prefs = get_user_prefs_file()
-    print("Loading user prefs from", user_prefs)
-    prefs = {}
-    if user_prefs.exists():
-        with open(user_prefs, "r", encoding="utf-8") as f:
-            prefs = json.load(f)
-    return prefs
-
-
-class MainWindow(qw.QMainWindow):
-
-    def __init__(self, parent: qw.QWidget = None):
-
-        # Simple GUI with three buttons:
-        # 1) Select reference directory (saved in user config)
-        # 2) Select working directory (saved in user config)
-        # 3) Run the script with the selected directories (should prompt for ZIP file with openFileDialog and ask for a directory to save the output)
-        super().__init__(parent)
-        self.setWindowTitle("CNV Script")
-
-        self.setFixedSize(300, 150)
-
-        self._central_widget = qw.QWidget()
-
-        self._main_layout = qw.QVBoxLayout(self._central_widget)
-
-        self._run_button = qw.QPushButton("LANCER LE SCRIPT")
-        self._run_button.setSizePolicy(
-            qw.QSizePolicy.Policy.Expanding, qw.QSizePolicy.Policy.Expanding
-        )
-        self._run_button.setFont(qg.QFont("Arial", 20))
-        self._run_button.clicked.connect(self.run_script)
-
-        self._progressbar = qw.QProgressBar(self)
-        self._progressbar.setRange(0, 0)
-
-        # Add menu bar entry to open a Preferences dialog
-        self._menu_bar = self.menuBar()
-        self._file_menu = self._menu_bar.addMenu("&Fichier")
-
-        self._select_refdir_action = qg.QAction("Répertoire de référence...", self)
-        self._select_refdir_action.triggered.connect(self.select_refdir)
-
-        self._select_workdir_action = qg.QAction("Répertoire de travail...", self)
-        self._select_workdir_action.triggered.connect(self.select_workdir)
-
-        # Simply opens the json file in the default text editor
-        self.advanced_user_prefs = qg.QAction("Préférences avancées...", self)
-        self.advanced_user_prefs.triggered.connect(
-            lambda: qg.QDesktopServices.openUrl(
-                qc.QUrl.fromLocalFile(get_user_prefs_file())
-            )
-        )
-
-        self._file_menu.addAction(self._select_refdir_action)
-        self._file_menu.addAction(self._select_workdir_action)
-        self._file_menu.addAction(self.advanced_user_prefs)
-
-        self._main_layout.addWidget(self._run_button)
-        self._main_layout.addWidget(self._progressbar)
-
-        self._refdir = None
-        self._workdir = None
-        self._last_zip = None
-
-        prefs = load_user_prefs()
-        if "refdir" in prefs:
-            self._refdir = prefs["refdir"]
-        if "workdir" in prefs:
-            self._workdir = prefs["workdir"]
-        if "last_zip" in prefs:
-            self._last_zip = prefs["last_zip"]
-
-        self.setup_normal_mode()
-
-        self.setCentralWidget(self._central_widget)
-
-        self._process = qc.QProcess(self)
-        self._process.readyReadStandardOutput.connect(
-            self.on_ready_read_standard_output
-        )
-
-    def on_ready_read_standard_output(self):
-        print("Ready read standard output")
-
-    def select_refdir(self):
-        refdir = qw.QFileDialog.getExistingDirectory(
-            self, "Choisissez le répertoire de référence"
-        )
-        if refdir and os.path.isdir(refdir):
-            self._refdir = refdir
-            save_user_prefs({"refdir": refdir})
-        else:
-            qw.QMessageBox.information(
-                self,
-                "Erreur",
-                f"Répertoire de référence invalide. L'emplacement du dossier de référence n'a pas été modifié. ({self._refdir})",
-            )
-
-    def select_workdir(self):
-        workdir = qw.QFileDialog.getExistingDirectory(
-            self, "Choisissez le répertoire de travail"
-        )
-        if workdir and os.path.isdir(workdir):
-            self._workdir = workdir
-            save_user_prefs({"workdir": workdir})
-        else:
-            qw.QMessageBox.information(
-                self,
-                "Erreur",
-                f"Répertoire de travail invalide. L'emplacement du dossier de travail n'a pas été modifié. ({self._workdir})",
-            )
-
-    def run_script(self):
-        if self._process.state() == qc.QProcess.ProcessState.Running:
-            qw.QMessageBox.information(
-                self,
-                "What?",
-                "How did you manage to run this method while the process is running? The button is supposed to be hidden!!!",
-            )
-            print("Congrats ;)")
-            return
-        if self._refdir is None:
-            self.select_refdir()
-        if self._workdir is None:
-            self.select_workdir()
-        if self._refdir is None or self._workdir is None:
-            return
-        # Prompt for an existing ZIP file
-        input_zip, _ = qw.QFileDialog.getOpenFileName(
-            self,
-            caption="Choisissez le fichier ZIP de sortie de Genexus",
-            dir=self._last_zip or qc.QDir().homePath(),
-            filter="Fichiers ZIP (*.zip)",
-        )
-        if not input_zip or not os.path.isfile(input_zip):
-            return
-        self._last_zip = input_zip
-        save_user_prefs({"last_zip": input_zip})
-
-        self.run_name, _ = qw.QInputDialog.getText(
-            self, "Nom du run", "Veuillez entrer le nom du run"
-        )
-        if not self.run_name:
-            return
-
-        arguments = [
-            "--refdir",
-            self._refdir,
-            "--workdir",
-            os.path.join(self._workdir, self.run_name),
-            input_zip,
-        ]
-
-        if "__compiled__" in globals():
-            self._process.setProgram(sys.argv[0])
-        else:
-            self._process.setProgram(sys.executable)
-            arguments.insert(0, sys.argv[0])
-        self._process.setArguments(arguments)
-        self._progressbar.setRange(0, 0)
-
-        qw.QMessageBox.information(
-            self,
-            "Running script",
-            "Starting process {0} with arguments {1}".format(
-                self._process.program(), " ".join(self._process.arguments())
-            ),
-        )
-
-        self._process.start()
-
-        if self._process.waitForStarted():
-            self.setup_wait_mode()
-            self._process.finished.connect(self.on_worker_finished)
-        else:
-            qw.QMessageBox.critical(self, "Erreur", "Impossible de lancer le script")
-
-    def closeEvent(self, event: qg.QCloseEvent):
-        if self._process.state() == qc.QProcess.ProcessState.Running:
-            if (
-                qw.QMessageBox.question(
-                    self,
-                    "Arrêter le script ?",
-                    "Le script est en cours d'exécution. Voulez-vous vraiment l'arrêter ?",
-                    qw.QMessageBox.StandardButton.Yes
-                    | qw.QMessageBox.StandardButton.No,
-                )
-                == qw.QMessageBox.StandardButton.Yes
-            ):
-                self._process.kill()
-                self._process.waitForFinished()
-                event.accept()
-            else:
-                event.ignore()
-
-    def on_worker_finished(self, returncode: int):
-        if returncode != 0:
-            qw.QMessageBox.critical(self, "Erreur", "Le script a échoué")
-        else:
-            qw.QMessageBox.information(
-                self, "Succès !", "Le script s'est terminé avec succès !"
-            )
-            qg.QDesktopServices.openUrl(
-                qc.QUrl.fromLocalFile(os.path.join(self._workdir, self.run_name))
-            )
-        self.setup_normal_mode()
-
-    def setup_wait_mode(self):
-        self._run_button.hide()
-        self._progressbar.show()
-
-    def setup_normal_mode(self):
-        self._run_button.show()
-        self._progressbar.hide()
-
-
-def main_gui():
-    app = qw.QApplication(sys.argv)
-    app.setApplicationName("CNVScript")
-    window = MainWindow()
-    window.show()
-    return app.exec()
+from gui import main_gui
 
 
 def main():
 
+    import argparse
     import sys
 
     if len(sys.argv) == 1:
@@ -294,7 +40,10 @@ def main():
     )
 
     parser.add_argument(
-        "input_zip", help="Zip file with depth of coverage as outputted by the Genexus"
+        "input_files",
+        help="Either a zip file as outputted by the Genexus coverage plugin, or a list of amplicon coverage files",
+        nargs="+",
+        type=Path,
     )
     parser.add_argument(
         "--duplication-threshold",
@@ -312,19 +61,163 @@ def main():
         "--workdir",
         help="Working directory. Defaults to current path",
         default=os.getcwd(),
+        type=Path,
+    )
+    parser.add_argument("--design-bed", help="Design bed file", type=Path)
+    parser.add_argument(
+        "--reference-coverage-bed", help="Reference coverage bed file", type=Path
     )
     parser.add_argument(
-        "--refdir",
-        help="Path to directory with all required files. Should contain:\n{0}".format(
-            ", ".join(reference_files)
-        ),
-        default="C:/CNVfile",
+        "--keep-normalized-depth",
+        help="Keep normalized depth",
+        action="store_true",
     )
     args = parser.parse_args()
 
-    cnv_script_karim(**vars(args))
+    entry_point(
+        args.input_files,
+        args.workdir,
+        args.design_bed,
+        args.duplication_threshold,
+        args.deletion_threshold,
+    )
 
     return 0
+
+
+def tsv_to_json(
+    input_filename: str | os.PathLike,
+    output_filename: str | os.PathLike,
+    key_column_name: str,
+    delimiter: str = "\t",
+):
+    """Transforms a tsv file into a json file, where the key is the value of the key_column_name column.
+    input_filename should be a tsv file with a header. Delimiter can be changed.
+    Output keys are the values of the key_column_name column, and the values are dictionaries with the column names as keys.
+
+    Args:
+        input_filename (str | os.PathLike): Path to input tsv file (with header)
+        output_filename (str | os.PathLike): Path to output json file
+        key_column_name (str): Name of the column to use as key
+        delimiter (str, optional): Input file delimiter. Defaults to "\t".
+    """
+    import csv
+    import json
+
+    with open(input_filename) as input_file:
+        reader = csv.DictReader(input_file, delimiter=delimiter)
+        d = {
+            field[key_column_name]: {
+                k: v for k, v in field.items() if k != key_column_name
+            }
+            for field in reader
+        }
+
+    with open(output_filename, "w") as output_file:
+        json.dump(d, output_file)
+
+
+def extract_amplicon_files_from_zip(
+    input_zip: str | os.PathLike, workdir: str | os.PathLike
+):
+    """Writes all amplicon coverage files from the input zip to the workdir.
+    Returns a list of written files paths (relative to workdir).
+
+    Args:
+        input_zip (str | os.PathLike): Zip file to extract amplicon coverage files from
+        workdir (str | os.PathLike): Directory to write the amplicon coverage files to (will try to create if it doesn't exist)
+    """
+    if not os.path.isdir(workdir):
+        os.makedirs(workdir, exist_ok=True)
+    written_files = []
+    import zipfile
+
+    with zipfile.ZipFile(input_zip, "r") as zip_ref:
+        for dirname in zipfile.Path(zip_ref).iterdir():
+            if dirname.is_dir():
+                samplename = dirname.name
+                for filename in dirname.iterdir():
+                    if filename.name.endswith(".amplicon.cov.xls"):
+                        with open(
+                            os.path.join(workdir, samplename + ".bed"),
+                            "wb",
+                        ) as output_file:
+                            with filename.open("rb") as input_file:
+                                for line in input_file:
+                                    output_file.write(line)
+                                written_files.append(samplename + ".bed")
+    return written_files
+
+
+def entry_point(
+    input_files, workdir, design_bed, duplication_threshold, deletion_threshold
+):
+    os.makedirs(workdir, exist_ok=True)
+    for input_file in input_files:
+        input_file = Path(input_file)
+        if input_file.suffix == ".zip":
+            input_bed_filenames = [
+                workdir / "extracted" / p
+                for p in extract_amplicon_files_from_zip(
+                    input_file, os.path.join(workdir, "extracted")
+                )
+            ]
+            aggregate_samples_coverage(
+                input_bed_filenames, design_bed, workdir / "all_samples_coverage.tsv"
+            )
+
+
+def cnv_call(input_bed_filenames, design_bed_filename, reference_coverage_bed_filename):
+    pass
+
+
+def aggregate_samples_coverage(
+    input_bed_filenames: list[Path], design_bed_filename: Path, output_filename: Path
+):
+    input_bed_filenames = [Path(p) for p in input_bed_filenames]
+    for input_bed_filename in input_bed_filenames:
+        tsv_to_json(
+            input_bed_filename, input_bed_filename.with_suffix(".json"), "region_id"
+        )
+    if not os.path.exists(design_bed_filename.with_suffix(".json")):
+        # First time we see this design bed file
+        tsv_to_json(
+            design_bed_filename, design_bed_filename.with_suffix(".json"), "region_id"
+        )
+
+    aggregate: dict[str, dict[str, str]] = {}
+
+    with open(design_bed_filename.with_suffix(".json")) as design_bed_file:
+        design_bed = json.load(design_bed_file)
+
+    patient_ids = [(p.stem, p) for p in input_bed_filenames]
+
+    for region_id in design_bed:
+        if region_id not in aggregate:
+            aggregate[region_id] = {}
+        aggregate[region_id]["gene"] = design_bed[region_id]["GENE"]
+        aggregate[region_id][
+            "locus"
+        ] = f'{design_bed[region_id]["contig_id"]}:{design_bed[region_id]["contig_srt"]}-{design_bed[region_id]["contig_end"]}'
+        for patient_id, patient_bed_path in patient_ids:
+            with open(patient_bed_path.with_suffix(".json")) as input_bed_file:
+                input_bed: dict[str, dict[str, str]] = json.load(input_bed_file)
+            if region_id in input_bed:
+                aggregate[region_id][patient_id] = input_bed[region_id]["total_reads"]
+            else:
+                aggregate[region_id][patient_id] = 0
+
+    # Output aggregate to output_filename (as TSV)
+    with open(output_filename, "w") as output_file:
+        output_file.write("Gene\tregion_id")
+        for patient_id, _ in patient_ids:
+            output_file.write(f"\t{patient_id}")
+        output_file.write("\n")
+        for region_id, region_data in aggregate.items():
+            output_file.write(f"{region_data['gene']}\t{region_id}")
+            for patient_id, _ in patient_ids:
+                output_file.write(f"\t{region_data.get(patient_id, 0)}")
+            output_file.write("\n")
 
 
 def cnv_script_karim(

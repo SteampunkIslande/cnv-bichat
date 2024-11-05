@@ -2,3 +2,6 @@
 cnv_ref
 windows*
 version*
+*.zip
+testdir
+__*
