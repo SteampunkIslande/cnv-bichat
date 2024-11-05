@@ -9,7 +9,6 @@ Légère refactorisation du code.
 
 """
 
-import argparse
 import os
 import sys
 
@@ -192,6 +191,12 @@ def aggregate_samples_coverage(
 
     patient_ids = [(p.stem, p) for p in input_bed_filenames]
 
+    input_patients_beds = {}
+    for patient_id, patient_bed_path in patient_ids:
+        with open(patient_bed_path.with_suffix(".json")) as input_bed_file:
+            input_bed: dict[str, dict[str, str]] = json.load(input_bed_file)
+        input_patients_beds[patient_id] = input_bed
+
     for region_id in design_bed:
         if region_id not in aggregate:
             aggregate[region_id] = {}
@@ -200,10 +205,11 @@ def aggregate_samples_coverage(
             "locus"
         ] = f'{design_bed[region_id]["contig_id"]}:{design_bed[region_id]["contig_srt"]}-{design_bed[region_id]["contig_end"]}'
         for patient_id, patient_bed_path in patient_ids:
-            with open(patient_bed_path.with_suffix(".json")) as input_bed_file:
-                input_bed: dict[str, dict[str, str]] = json.load(input_bed_file)
-            if region_id in input_bed:
-                aggregate[region_id][patient_id] = input_bed[region_id]["total_reads"]
+            input_patient_bed = input_patients_beds[patient_id]
+            if region_id in input_patient_bed:
+                aggregate[region_id][patient_id] = input_patient_bed[region_id][
+                    "total_reads"
+                ]
             else:
                 aggregate[region_id][patient_id] = 0
 
@@ -241,7 +247,6 @@ def cnv_script_karim(
     import numpy
     import xlrd
     import xlsxwriter
-
     # Used to save the file as excel workbook
     # Need to install this library
     import xlwt
