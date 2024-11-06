@@ -14,7 +14,6 @@ Refactorisation du code pour le rendre plus modulaire et plus facile à tester.
 """
 
 import os
-import sys
 from pathlib import Path
 
 import duckdb as db
@@ -69,18 +68,15 @@ def main():
     )
     args = parser.parse_args()
 
-    if not args.is_reference_run:
-
-        call(
-            args.input_files,
-            args.workdir,
-            args.design_bed,
-            args.reference_coverage_bed,
-            args.duplication_threshold,
-            args.deletion_threshold,
-        )
-
-    return 0
+    return call(
+        args.input_files,
+        args.workdir,
+        args.design_bed,
+        args.reference_coverage_bed,
+        args.duplication_threshold,
+        args.deletion_threshold,
+        args.is_reference_run,
+    )
 
 
 def extract_amplicon_files_from_zip(
@@ -119,11 +115,31 @@ def call(
     input_files: list[Path],
     workdir: Path,
     design_bed: Path,
-    reference_coverage_bed_filename,
+    reference_coverage_bed_filename: Path,
     duplication_threshold,
     deletion_threshold,
+    is_reference_run=False,
 ):
-    os.makedirs(workdir, exist_ok=True)
+
+    if not design_bed.exists():
+        raise FileNotFoundError(design_bed)
+
+    if is_reference_run:
+        if reference_coverage_bed_filename.exists():
+            raise FileExistsError(reference_coverage_bed_filename)
+    else:
+        if not reference_coverage_bed_filename:
+            raise ValueError(
+                "Reference coverage bed file is required for non-reference run"
+            )
+        if not reference_coverage_bed_filename.exists():
+            raise FileNotFoundError(reference_coverage_bed_filename)
+
+    # Avoid re-running the same analysis
+    if workdir.exists():
+        print(f"Output directory {workdir} already exists. Skipping analysis.")
+        return 1
+
     zip_files = [f for f in input_files if f.suffix == ".zip"]
 
     # Any other file is considered an amplicon coverage file in bed format
@@ -144,9 +160,11 @@ def call(
             reference_coverage_bed_filename,
             duplication_threshold,
             deletion_threshold,
+            is_reference_run,
         )
 
     if bed_files:
+
         cnv_call(
             bed_files,
             design_bed,
@@ -154,44 +172,152 @@ def call(
             reference_coverage_bed_filename,
             duplication_threshold,
             deletion_threshold,
+            is_reference_run,
         )
 
 
-def build_normalized_coverage_bed(
-    coverage_bed_filename: Path,
-    sample_names: list[str],
-    design_bed_filename: Path,
-    output_filename: Path,
+def build_reference_coverage_table(
+    normalized_depth_table: db.DuckDBPyRelation,
+    design_bed_table: db.DuckDBPyRelation,
 ):
-    pass
+    return db.sql(
+        "SELECT design_bed_table.region_id,avg(normalized_depth_table.normalized_depth),index AS avg_normalized_depth FROM normalized_depth_table JOIN design_bed_table ON design_bed_table.region_id=normalized_depth_table.region_id GROUP BY region_id"
+    )
+
+
+def normalize_coverage_table(
+    coverage_table: db.DuckDBPyRelation,
+    total_read_counts_per_sample: db.DuckDBPyRelation,
+):
+    return db.sql(
+        "SELECT coverage_table.*,coverage_table.total_reads / (tot.total_reads_sum - coverage_table.total_reads) AS normalized_depth FROM coverage_table JOIN total_read_counts_per_sample tot ON coverage_table.sample_name = tot.sample_name"
+    )
+
+
+def pivoted_amplicon_ratio_table(
+    ratio_table: db.DuckDBPyRelation,
+    ref_table: db.DuckDBPyRelation,
+):
+    return db.sql(
+        """SELECT * EXCLUDE(index) FROM 
+        (PIVOT
+            (SELECT ref_table.contig_id,ref_table.region_id,ratio_table.ratio,ratio_table.sample_name,index FROM ref_table JOIN ratio_table on ratio_table.region_id=ref_table.region_id
+            ) ON sample_name USING first(ratio)
+        ) ORDER BY index"""
+    )
+
+
+def pivoted_gene_ratio_table(
+    ratio_table: db.DuckDBPyRelation,
+    ref_table: db.DuckDBPyRelation,
+):
+    return db.sql(
+        "SELECT * EXCLUDE(index) FROM (SELECT contig_id,GENE,avg(COLUMNS(* EXCLUDE(GENE,contig_id,region_id))) FROM (PIVOT (SELECT ref_table.GENE,ref_table.contig_id,ref_table.region_id,ratio_table.ratio,ratio_table.sample_name,index FROM ref_table JOIN ratio_table on ratio_table.region_id=ref_table.region_id) ON sample_name USING first(ratio)) GROUP BY (GENE,contig_id)) ORDER BY index"
+    )
+
+
+def export_duckdb_table_to_excel(
+    table: db.DuckDBPyRelation,
+    output_filename: Path,
+    deletion_threshold=0.5,
+    duplication_threshold=1.76,
+):
+    rows = table.fetchall()
+    import xlsxwriter
+
+    workbook = xlsxwriter.Workbook(output_filename)
+    worksheet = workbook.add_worksheet()
+
+    cell_formatBOLD = workbook.add_format({"bold": True})
+
+    cell_formatRED = workbook.add_format({"font_color": "red"})
+    cell_formatBLUE = workbook.add_format({"font_color": "blue"})
+
+    col_names = table.columns
+    for i, col_name in enumerate(col_names):
+        worksheet.write(0, i, col_name, cell_formatBOLD)
+
+    for i, row in enumerate(rows, start=1):
+        for j, cell in enumerate(row):
+            col_name = col_names[j]
+            # That's how I identify the sample name column (containing the ratio values)
+            if col_name not in ("index", "region_id", "contig_id", "GENE"):
+                cell = round(cell, 3)
+                if cell < deletion_threshold:
+                    worksheet.write(i, j, cell, cell_formatRED)
+                elif cell >= duplication_threshold:
+                    worksheet.write(i, j, cell, cell_formatBLUE)
+                else:
+                    worksheet.write(i, j, cell)
+            else:
+                worksheet.write(i, j, cell)
+
+    workbook.close()
 
 
 def cnv_call(
-    input_bed_filenames,
-    design_bed,
+    input_bed_filenames: list[Path],
+    design_bed_filename,
     workdir,
     reference_coverage_bed_filename,
     duplication_threshold,
     deletion_threshold,
-):
-    aggregate_samples_coverage(
-        input_bed_filenames, design_bed, workdir / "all_samples_coverage.tsv"
-    )
-
-
-def aggregate_samples_coverage(
-    input_bed_filenames: list[Path], design_bed_filename: Path, output_filename: Path
+    is_reference_run=False,
 ):
     input_bed_filenames = "[" + ", ".join([f"'{p}'" for p in input_bed_filenames]) + "]"
 
     ref_table = db.sql(
-        f"SELECT row_number() OVER () AS index,contig_id as Chr,GENE as Gene,region_id AS AmpliconID FROM read_csv('{design_bed_filename}',sep='\t')"
+        f"SELECT row_number() OVER () AS index,contig_id,GENE,region_id FROM read_csv('{design_bed_filename}',sep='\t')"
     )
     cov_table = db.sql(
         f"SELECT region_id,total_reads,parse_filename(filename,True) AS sample_name FROM read_csv({input_bed_filenames},sep='\t',filename=True,union_by_name=True)"
     )
+    aggregate_samples_coverage(
+        ref_table, cov_table, workdir / "all_samples_coverage.tsv"
+    )
+    total_read_counts_per_sample = db.sql(
+        "SELECT sample_name,sum(total_reads) AS total_reads_sum FROM cov_table GROUP BY sample_name"
+    )
+    normalized_depth_table = normalize_coverage_table(
+        cov_table, total_read_counts_per_sample
+    )
+    if is_reference_run:
+        reference_coverage_table = build_reference_coverage_table(
+            normalized_depth_table,
+            ref_table,
+        )
+        db.sql(
+            f"COPY (SELECT * EXCLUDE(index) FROM reference_coverage_table ORDER BY index) TO '{reference_coverage_bed_filename}' (DELIMITER '\t')"
+        )
+        return 0
+    else:
+        reference_coverage_table = db.sql(
+            f"SELECT row_number() OVER () AS index,region_id,avg_normalized_depth FROM read_csv('{reference_coverage_bed_filename}',sep='\t')"
+        )
+        ratio_table = db.sql(
+            "SELECT reference_coverage_table.region_id,sample_name,normalized_depth/avg_normalized_depth AS ratio FROM reference_coverage_table JOIN normalized_depth_table ON reference_coverage_table.region_id=normalized_depth_table.region_id"
+        )
+
+        final_amplicon_ratio_table = pivoted_amplicon_ratio_table(
+            ratio_table, ref_table
+        )
+        final_gene_ratio_table = pivoted_gene_ratio_table(ratio_table, ref_table)
+
+        export_duckdb_table_to_excel(
+            final_amplicon_ratio_table, workdir / "amplicon_ratio.xlsx"
+        )
+        export_duckdb_table_to_excel(
+            final_gene_ratio_table, workdir / "gene_ratio.xlsx"
+        )
+
+
+def aggregate_samples_coverage(
+    ref_table: db.DuckDBPyRelation,
+    cov_table: db.DuckDBPyRelation,
+    output_filename: Path,
+):
     db.sql(
-        f"COPY (SELECT * EXCLUDE(index) FROM (PIVOT (SELECT ref.index,ref.Gene,ref.Chr,ref.AmpliconID,cov.total_reads,cov.sample_name FROM ref_table ref JOIN cov_table cov ON cov.region_id=ref.AmpliconID) ON sample_name USING first(total_reads) ) ORDER BY index) TO '{output_filename}' (DELIMITER '\t')"
+        f"COPY (SELECT * EXCLUDE(index) FROM (PIVOT (SELECT ref.index,ref.GENE,ref.contig_id,ref.region_id,cov.total_reads,cov.sample_name FROM ref_table ref JOIN cov_table cov ON cov.region_id=ref.region_id) ON sample_name USING first(total_reads) ) ORDER BY index) TO '{output_filename}' (DELIMITER '\t')"
     )
 
 
@@ -335,7 +461,7 @@ def cnv_script_karim(
     # Add a bold format to use to highlight cells.
     bold = workbook.add_format({"bold": True})
     worksheet.write("A1", "Chr", bold)
-    worksheet.write("B1", "AmpliconID", bold)
+    worksheet.write("B1", "region_id", bold)
 
     cell_formatRED = workbook.add_format()
 
@@ -726,4 +852,6 @@ def cnv_script_karim(
 
 
 if __name__ == "__main__":
+    import sys
+
     sys.exit(main())
