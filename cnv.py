@@ -317,6 +317,27 @@ def cnv_call(
             duplication_threshold,
         )
 
+        write_cnv_report(
+            final_amplicon_ratio_table,
+            ["region_id"],
+            workdir / "cnv_amplicons_report.html",
+            deletion_threshold,
+            duplication_threshold,
+            x_axis_label="Amplicon",
+            y_axis_label="Ratio",
+        )
+
+        write_cnv_report(
+            final_gene_ratio_table,
+            ["GENE"],
+            workdir / "cnv_genes_report.html",
+            deletion_threshold,
+            duplication_threshold,
+            x_axis_label="Gene",
+            y_axis_label="Ratio",
+            x_ticks_as_labels=True,
+        )
+
 
 def aggregate_samples_coverage(
     ref_table: db.DuckDBPyRelation,
@@ -328,534 +349,142 @@ def aggregate_samples_coverage(
     )
 
 
-def cnv_script_karim(
-    input_zip, workdir, refdir, duplication_threshold=1.76, deletion_threshold=0.5
+def write_cnv_report(
+    table: db.DuckDBPyRelation,
+    col_names: list[str],
+    output_filename: Path,
+    deletion_threshold: float,
+    duplication_threshold: float,
+    x_axis_label="Amplicon",
+    y_axis_label="Ratio",
+    x_ticks_as_labels=False,
 ):
-    """
-    Created on Mon Apr 10 20:22:44 2020
+    from jinja2 import BaseLoader, Environment
 
-    Script CNV Somatique
+    from html_report_template import template
 
-    @author: Karim Diallo
-    """
-    import glob
-    import os
-    import re
-    import shutil
-    import time
-    import zipfile
-
-    import matplotlib.pyplot as plt
-    import numpy
-    import xlrd
-    import xlsxwriter
-
-    # Used to save the file as excel workbook
-    # Need to install this library
-    import xlwt
-
-    ##############################################################################
-    tmpsDebut = time.time()
-    ##############################################################################
-    print("\n************ Script CNV secteur SO GENEXUS panel AP-HP V1 *********\n\n")
-    #####################################################################
-    #####################################################################
-    ######################################################################################## LECTURE Tous les fichiers coverage de tous les patients
-    #######################################################################################  CREATION d'un fichier entree intermediaire
-    ##### LECTURE DU FICHIER ZIP pour extraire les répertoires contenant les fichiers
-
-    ###### NOM DU RUN DANS FICHIER DE SORTIE
-    nameRUN = os.path.basename(input_zip).split(".")[0]
-
-    resultats_amp_dir = os.path.join(workdir, "resultats_AMP")
-    os.makedirs(resultats_amp_dir, exist_ok=True)
-
-    resultats_gene_dir = os.path.join(workdir, "resultats_Gene")
-    os.makedirs(resultats_gene_dir, exist_ok=True)
-
-    filePatientALL = workdir + "/fichierEntreCNV_ALLpatients.xlsx"
-
-    fichierNomGenes = refdir + "/listeCorrespondancePositionAmpliconGene.xlsx"
-    if not os.path.exists(fichierNomGenes):
-        raise FileNotFoundError(fichierNomGenes)
-
-    fichierListeOrdonnee = (
-        refdir + "/GENEXUS_fichierOrdonneRegionStartGene_PanelAPHP.xlsx"
-    )
-    if not os.path.exists(fichierListeOrdonnee):
-        raise FileNotFoundError(fichierListeOrdonnee)
-
-    fichierOrdonnee = refdir + "/fichierOrdonneRegionStartGene_PanelAPHP.xlsx"
-    if not os.path.exists(fichierOrdonnee):
-        raise FileNotFoundError(fichierOrdonnee)
-
-    fichierTemoin = (
-        refdir + "/Moyenne_NormalizedRead_count_TemoinsPorphyriesGENEXUS.xlsx"
-    )
-    if not os.path.exists(fichierTemoin):
-        raise FileNotFoundError(fichierTemoin)
-
-    f_ALL: xlrd.Book = xlrd.open_workbook(filePatientALL)
-    feui_ALL = f_ALL.sheet_by_index(0)
-
-    ##Nom fichier SORTIE
-    workbook = xlsxwriter.Workbook(
-        os.path.join(resultats_amp_dir, "Resultat_Ratio_" + nameRUN + ".xlsx")
-    )
-
-    #####################################################################
-
-    def somme_colonnePatientX(fichierP, no_col):
-        fich_col: xlrd.Book = xlrd.open_workbook(fichierP)
-        feuil_col = fich_col.sheet_by_index(0)
-        somme_colPatX = 0
-        for i in range(1, feuil_col.nrows):
-            somme_colPatX += feuil_col.cell_value(i, no_col)
-        return somme_colPatX
-
-    def moy_Norm_TemoinsPorphy(fichierTemoin):
-        fichier1: xlrd.Book = xlrd.open_workbook(fichierTemoin)
-        feuil1 = fichier1.sheet_by_index(0)
-        dict_moy_Norm_TemoinsPorphy = {}
-        for li in range(1, feuil1.nrows):
-            dict_moy_Norm_TemoinsPorphy[
-                str(feuil1.cell_value(li, 0)).replace(".0", "")
-            ] = feuil1.cell_value(li, 1)
-
-        return dict_moy_Norm_TemoinsPorphy
-
-    # calcul function temoin porphyrie
-    dict_moy_Norm_TemoinsPorphy = moy_Norm_TemoinsPorphy(fichierTemoin)
-
-    def moy_Norm_dict_patient(filePat, numPat):
-        fichier2: xlrd.Book = xlrd.open_workbook(filePat)
-        feuil2 = fichier2.sheet_by_index(0)
-        dictPatient = {}
-        for li in range(1, feuil2.nrows):
-            dictPatient[str(feuil2.cell_value(li, 1)).replace(".0", "")] = (
-                feuil2.cell_value(li, numPat)
-                / (
-                    somme_colonnePatientX(filePat, numPat)
-                    - feuil2.cell_value(li, numPat)
-                )
-            )
-
-        return dictPatient
-
-    ####Amplicon ordonnée
-    fichier1: xlrd.Book = xlrd.open_workbook(fichierOrdonnee)
-    feuil1 = fichier1.sheet_by_index(0)
-    listeOrdonneeAmpli = []
-    for li in range(1, feuil1.nrows):
-        listeOrdonneeAmpli.append(str(feuil1.cell_value(li, 1)).replace(".0", ""))
-
-    def dictChrm(filePati):
-        fichier2: xlrd.Book = xlrd.open_workbook(filePati)
-        feuil2 = fichier2.sheet_by_index(0)
-        dictChromosome = {}
-        for li in range(1, feuil2.nrows):
-            dictChromosome[str(feuil2.cell_value(li, 1)).replace(".0", "")] = (
-                feuil2.cell_value(li, 0)
-            )
-        return dictChromosome
-
-    dictChromosome = dictChrm(fichierOrdonnee)
-
-    ##Ecrire fichier de sortie normalisation
-    worksheet = workbook.add_worksheet()
-    # Iterate over the data and write it out row by row.
-    #########
-    # Add a bold format to use to highlight cells.
-    bold = workbook.add_format({"bold": True})
-    worksheet.write("A1", "Chr", bold)
-    worksheet.write("B1", "region_id", bold)
-
-    cell_formatRED = workbook.add_format()
-
-    cell_formatRED.set_font_color("red")
-
-    cell_formatBLUE = workbook.add_format()
-
-    cell_formatBLUE.set_font_color("blue")
-
-    numpatient = 3
-    varPat = 3
-    for i in range(3, feui_ALL.ncols):
-
-        #####calcul dictRatio
-        dictRatio = {}
-
-        moy_Norm_dict_patientEC = moy_Norm_dict_patient(
-            filePatientALL, numpatient
-        )  ###APPEL DE LA FONCTION patient all
-        for kle, val in moy_Norm_dict_patientEC.items():
-            dictRatio[kle] = round(
-                moy_Norm_dict_patientEC[kle] / dict_moy_Norm_TemoinsPorphy[kle], 3
-            )
-
-        ## Add a number format for cells with xxx.
-        row = 1
-        col = 0
-        for item in listeOrdonneeAmpli:
-            if dictRatio[item] < deletion_threshold:
-                worksheet.write(row, col, dictChromosome[item])
-                worksheet.write(row, col + 1, item)
-                worksheet.write(row, col + varPat, dictRatio[item], cell_formatRED)
-                row += 1
-            elif dictRatio[item] >= duplication_threshold:
-                worksheet.write(row, col, dictChromosome[item])
-                worksheet.write(row, col + 1, item)
-                worksheet.write(row, col + varPat, dictRatio[item], cell_formatBLUE)
-                row += 1
-            else:
-                worksheet.write(row, col, dictChromosome[item])
-                worksheet.write(row, col + 1, item)
-                worksheet.write(row, col + varPat, dictRatio[item])
-                row += 1
-
-        worksheet.write(0, varPat, feui_ALL.cell_value(0, varPat))
-
-        ######
-        ####### Les seuils 1.25dup & 0.7 dél  !!!
-
-        ####################################
-        with open(
-            os.path.join(
-                resultats_amp_dir, "Fichier_Anomalies des patients_" + nameRUN + ".txt"
-            ),
-            "a",
-        ) as mon_fichier:
-            mon_fichier.write(
-                "********Résultats récap...patient : {} \n".format(
-                    feui_ALL.cell_value(0, varPat)
-                )
-            )
-            for cle in listeOrdonneeAmpli:
-                if dictRatio[cle] < deletion_threshold:
-                    mon_fichier.write(
-                        "{}; Délétion sur amplicon : {} son ratio = {} \n".format(
-                            dictChromosome[cle], cle, dictRatio[cle]
-                        )
-                    )
-            for cle in listeOrdonneeAmpli:
-                if dictRatio[cle] >= duplication_threshold:
-                    mon_fichier.write(
-                        "{}; Duplication sur amplicon : {} son ratio = {} \n".format(
-                            dictChromosome[cle], cle, dictRatio[cle]
-                        )
-                    )
-            mon_fichier.write("\n-----------------\n")
-
-        ## Create  data
-        seq1y = []
-        seq2y = []
-        seq3y = []
-        ind1 = []
-        ind2 = []
-        ind3 = []
-        var = 0
-        for exID in listeOrdonneeAmpli:
-            var += 1
-            for i, j in dictRatio.items():
-                if exID == i and j < deletion_threshold:
-                    seq1y.append(j)
-                    ind1.append(var)
-                elif exID == i and j >= duplication_threshold:
-                    seq2y.append(j)
-                    ind2.append(var)
-                elif exID == i:
-                    seq3y.append(j)
-                    ind3.append(var)
-
-        g1 = (ind1, seq1y)
-        g2 = (ind2, seq2y)
-        g3 = (ind3, seq3y)
-        #
-        data = (g1, g2, g3)
-        colors = ("red", "blue", "green")
-        groups = ("Deletion", "Duplication", "Normal")
-
-        # Create plot
-        fig = plt.figure()
-        ax = fig.add_subplot(1, 1, 1)
-
-        for data, color, group in zip(data, colors, groups):
-            x, y = data
-            ax.scatter(x, y, alpha=0.8, c=color, edgecolors="none", s=30, label=group)
-
-        plt.xlabel("Amplicon-ID")
-        plt.ylabel("Ratio")
-
-        ax.plot(
-            [0, 340],
-            [deletion_threshold, deletion_threshold],
-            color="black",
-            linestyle="solid",
-        )
-        ax.plot(
-            [0, 340],
-            [duplication_threshold, duplication_threshold],
-            color="black",
-            linestyle="solid",
-        )
-        ax.plot([0, 340], [2.4, 2.4], color="black", linestyle="dashdot")
-        kurs = "%s.png" % feui_ALL.cell_value(0, varPat)
-        plt.title(kurs)
-
-        plt.savefig(os.path.join(resultats_amp_dir, kurs), format="png")
-
-        fig.clf()
-        plt.close()
-
-        numpatient += 1
-        varPat += 1
-
-    workbook.close()
-    #
-    #################################################################################################################################
-    #################################################################################################################################
-    #################################################################################################################################
-    #############################################  MOYENNE RATIO
-    fileMoyenneRatio = os.path.join(
-        resultats_amp_dir, "Resultat_Ratio_" + nameRUN + ".xlsx"
-    )
-    rbFileMoyRatio: xlrd.Book = xlrd.open_workbook(fileMoyenneRatio)
-    feui_FMR = rbFileMoyRatio.sheet_by_index(0)
-
-    open_fichierNomGenes: xlrd.Book = xlrd.open_workbook(fichierNomGenes)
-    feuille_fichierNomGenes = open_fichierNomGenes.sheet_by_index(0)
-
-    listeNomGene0 = []
-    for liFNG in range(1, feuille_fichierNomGenes.nrows):
-        listeNomGene0.append(
-            str(feuille_fichierNomGenes.cell_value(liFNG, 4)).replace(".0", "")
-        )
-
-    listeNomGene = set(listeNomGene0)
-
-    ##### LES GENES IDENTITOVIGILANCES
-    listeGeneNonInterets = [
-        "PENTA",
-        "224830378",
-        "224869380",
-        "224862488",
-        "224879644",
-        "224829586",
-        "224851112",
-        "TH01",
-        "224825605",
-        "224824531",
-        "AMEX",
-        "AMEY",
-        "D1MS201754411",
-        "MON27",
-        "BAT26",
-        "D2MS62063094",
-        "NR24",
-        "BAT25",
-        "D5MS172421761",
-        "D6MS142691951",
-        "D7MS1787520",
-        "D7MS74608741",
-        "D11MS106695515",
-        "D13MS31722621",
-        "NR21",
-        "D15MS45897772",
-        "D16MS18882660",
-        "D17MS19314918",
+    sample_names = [
+        f'"{c}"'
+        for c in table.columns
+        if c not in ("index", "region_id", "GENE", "contig_id")
     ]
 
-    ######fichier excel de sortie
-    workbook_RG = xlsxwriter.Workbook(
-        os.path.join(resultats_gene_dir, "Resultat_MeanRatioGene_" + nameRUN + ".xlsx")
+    rtemplate = Environment(loader=BaseLoader).from_string(template)
+    data = {
+        "samples": {sample_name.replace('"', ""): {} for sample_name in sample_names}
+    }
+    for sample_name in sample_names:
+        unquoted_sample_name = sample_name.replace('"', "")
+        deletions = (
+            table.select(sample_name, "contig_id", *col_names)
+            .filter(f"""{sample_name} < {deletion_threshold}""")
+            .pl()
+            .to_dicts()
+        )
+
+        duplications = (
+            table.select(sample_name, "contig_id", *col_names)
+            .filter(f"""{sample_name} >= {duplication_threshold}""")
+            .pl()
+            .to_dicts()
+        )
+        data["samples"][unquoted_sample_name]["deletion"] = [
+            f"{r['contig_id']} - {r[col_names[0]]} : Ratio = {r[unquoted_sample_name]:.3f}"
+            for r in deletions
+        ]
+        data["samples"][unquoted_sample_name]["duplication"] = [
+            f"{d['contig_id']} - {d[col_names[0]]} : Ratio = {d[unquoted_sample_name]:.3f}"
+            for d in duplications
+        ]
+        data["samples"][unquoted_sample_name]["graph"] = plot_cnv_results(
+            table,
+            col_names[0],
+            sample_name,
+            deletion_threshold,
+            duplication_threshold,
+            x_axis_label=x_axis_label,
+            y_axis_label=y_axis_label,
+            title_label=f"{unquoted_sample_name} CNV results",
+            x_ticks_as_labels=x_ticks_as_labels,
+        )
+    with open(output_filename, "w") as f:
+        f.write(rtemplate.render(**data))
+
+
+def plot_cnv_results(
+    pivoted_table: db.DuckDBPyRelation,
+    column_name: str,
+    sample_name: str,
+    deletion_threshold=0.5,
+    duplication_threshold=1.76,
+    x_axis_label="Amplicon",
+    y_axis_label="Ratio",
+    title_label="CNV results",
+    x_ticks_as_labels=False,
+):
+    # Returns the base64 encoded image as a string
+    import base64
+    import io
+
+    import matplotlib.pyplot as plt
+
+    unquoted_sample_name = sample_name.replace('"', "")
+
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    data = (
+        db.sql(
+            f""" SELECT {column_name},{sample_name},if({sample_name} < {deletion_threshold},'deletion',if({sample_name} >= {duplication_threshold},'duplication','normal')) as group FROM pivoted_table"""
+        )
+        .pl()
+        .to_numpy()
     )
-    worksheet_rg = workbook_RG.add_worksheet("Reustats_moyenneRatioParGene")
-    bold = workbook_RG.add_format({"bold": True})
+    xtick = []
+    xtick_labels = []
+    for data_ in data:
+        x = data_[0]
+        y = data_[1]
+        group = data_[2]
+        color = {
+            "deletion": "red",
+            "duplication": "green",
+            "normal": "blue",
+        }[group]
+        if x_ticks_as_labels and group != "normal":
+            xtick.append(x)
+            xtick_labels.append(x)
+        ax.scatter([x], [y], alpha=0.8, c=color, edgecolors="none", s=30)
 
-    cell_formatRED = workbook_RG.add_format()
+    ax.set_xticks(xtick, xtick_labels, rotation=90)
 
-    cell_formatRED.set_font_color("red")
+    ax.set_xlabel(x_axis_label)
+    ax.set_ylabel(y_axis_label)
+    ax.set_title(title_label)
 
-    cell_formatBLUE = workbook_RG.add_format()
+    x_lim = ax.get_xlim()
 
-    cell_formatBLUE.set_font_color("blue")
+    ax.plot(
+        x_lim,
+        [deletion_threshold, deletion_threshold],
+        color="black",
+        linestyle="solid",
+    )
+    ax.plot(
+        x_lim,
+        [duplication_threshold, duplication_threshold],
+        color="black",
+        linestyle="solid",
+    )
+    ax.plot(x_lim, [2.4, 2.4], color="black", linestyle="dashdot")
 
-    ####remplir 1 ligne titre des colonnes
-    for erLigne in range(0, feui_FMR.ncols):
-        worksheet_rg.write(0, erLigne, feui_FMR.cell_value(0, erLigne), bold)
-        worksheet_rg.write(0, 1, "Gene", bold)
+    plt.autoscale()
 
-    ########☻parcours les colonnes de mon fichier par patient
-    numPat = 3
-    numpatient = 3
-    for patientNum in range(3, feui_FMR.ncols):
-        dictRatioParGene = {}
-        dictChromoso = {}
-        for gene in listeNomGene:
-            listeGene = []
-            for ifmr in range(1, feui_FMR.nrows):
-                if str(feui_FMR.cell_value(ifmr, 1)).replace(".0", "").find(gene) != -1:
-                    listeGene.append(feui_FMR.cell_value(ifmr, numPat))
-                    dictChromoso[gene] = feui_FMR.cell_value(ifmr, 0)
-            dictRatioParGene[gene] = numpy.mean(listeGene)
-
-        #######Ecriture fichier des ratios et fichier anomalie
-
-        with open(
-            os.path.join(
-                resultats_gene_dir, "Fichier_Anomalies des patients_" + nameRUN + ".txt"
-            ),
-            "a",
-        ) as my_fichier:
-            my_fichier.write(
-                "********Résultats récap...patient : {} \n".format(
-                    feui_FMR.cell_value(0, numPat)
-                )
-            )
-
-            ####
-            for geneName in listeNomGene:
-                if (
-                    dictRatioParGene[geneName] < deletion_threshold
-                    and geneName not in listeGeneNonInterets
-                ):
-                    my_fichier.write(
-                        "{} - Délétion gene : {} avec ratio = {} \n".format(
-                            dictChromoso[geneName], geneName, dictRatioParGene[geneName]
-                        )
-                    )
-
-            ###
-            for geneName in listeNomGene:
-                if (
-                    dictRatioParGene[geneName] >= duplication_threshold
-                    and geneName not in listeGeneNonInterets
-                ):
-                    my_fichier.write(
-                        "{} - Duplication gene : {} avec ratio = {} \n".format(
-                            dictChromoso[geneName], geneName, dictRatioParGene[geneName]
-                        )
-                    )
-
-            ligne = 1
-            for geneName in listeNomGene:
-                if (
-                    dictRatioParGene[geneName] < deletion_threshold
-                    and geneName not in listeGeneNonInterets
-                ):
-                    worksheet_rg.write(ligne, 0, dictChromoso[geneName])
-                    worksheet_rg.write(ligne, 1, geneName)
-                    worksheet_rg.write(
-                        ligne, numPat, dictRatioParGene[geneName], cell_formatRED
-                    )
-
-                elif (
-                    dictRatioParGene[geneName] >= duplication_threshold
-                    and geneName not in listeGeneNonInterets
-                ):
-                    worksheet_rg.write(ligne, 0, dictChromoso[geneName])
-                    worksheet_rg.write(ligne, 1, geneName)
-                    worksheet_rg.write(
-                        ligne, numPat, dictRatioParGene[geneName], cell_formatBLUE
-                    )
-
-                else:
-                    worksheet_rg.write(ligne, 0, dictChromoso[geneName])
-                    worksheet_rg.write(ligne, 1, geneName)
-                    worksheet_rg.write(ligne, numPat, dictRatioParGene[geneName])
-
-                ligne += 1
-            my_fichier.write("\n-----------------\n")
-
-            numPat += 1
-
-        #####GRAPHIQUE made
-        # Create  data
-        seq1y = []
-        seq2y = []
-        seq3y = []
-        ind1 = []
-        ind2 = []
-        ind3 = []
-        abcisse = 1
-        dictSticks = {}
-        for geneNom in listeNomGene:
-            if (
-                dictRatioParGene[geneNom] < deletion_threshold
-                and geneNom not in listeGeneNonInterets
-            ):
-                seq1y.append(dictRatioParGene[geneNom])
-                ind1.append(abcisse)
-                dictSticks[geneNom] = abcisse
-            elif (
-                dictRatioParGene[geneNom] >= duplication_threshold
-                and geneNom not in listeGeneNonInterets
-            ):
-                seq2y.append(dictRatioParGene[geneNom])
-                ind2.append(abcisse)
-                dictSticks[geneNom] = abcisse
-            elif (
-                dictRatioParGene[geneNom] > deletion_threshold
-                and dictRatioParGene[geneNom] < duplication_threshold
-                and geneNom not in listeGeneNonInterets
-            ):
-                seq3y.append(dictRatioParGene[geneNom])
-                ind3.append(abcisse)
-            abcisse += 1
-
-        g1 = (ind1, seq1y)
-        g2 = (ind2, seq2y)
-        g3 = (ind3, seq3y)
-
-        data = (g1, g2, g3)
-        colors = ("red", "blue", "green")
-        groups = ("Deletion", "Duplication", "Normal")
-
-        # Create plot
-        fig = plt.figure()
-        ax = fig.add_subplot(1, 1, 1)
-
-        for data, color, group in zip(data, colors, groups):
-            x, y = data
-            ax.scatter(x, y, alpha=0.8, c=color, edgecolors="none", s=30, label=group)
-
-        plt.xlabel("Gene")
-        plt.ylabel("Ratio mean")
-
-        ax.plot(
-            [0, 80],
-            [deletion_threshold, deletion_threshold],
-            color="black",
-            linestyle="solid",
-        )
-        ax.plot(
-            [0, 80],
-            [duplication_threshold, duplication_threshold],
-            color="black",
-            linestyle="solid",
-        )
-        ax.plot([0, 80], [2.4, 2.4], color="black", linestyle="dashdot")
-        kurs = "%s.png" % feui_FMR.cell_value(0, numpatient)
-
-        plt.title(kurs)
-        plt.xticks(
-            list(dictSticks.values()),
-            list(dictSticks.keys()),
-            rotation="vertical",
-            fontsize=8,
-        )
-
-        plt.savefig(os.path.join(resultats_gene_dir, kurs), format="png")
-        fig.clf()
-        plt.close()
-
-        numpatient += 1
-
-    workbook_RG.close()
-
-    print("\nSuccessful....OK\n")
-    tmpsFin = time.time() - tmpsDebut
-    print("Temps d'execution en s = %f" % tmpsFin)
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png")
+    buf.seek(0)
+    result = base64.b64encode(buf.read()).decode("utf-8")
+    plt.close()
+    return result
 
 
 if __name__ == "__main__":
