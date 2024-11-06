@@ -73,8 +73,8 @@ def main():
         args.workdir,
         args.design_bed,
         args.reference_coverage_bed,
-        args.duplication_threshold,
         args.deletion_threshold,
+        args.duplication_threshold,
         args.is_reference_run,
     )
 
@@ -116,22 +116,23 @@ def call(
     workdir: Path,
     design_bed: Path,
     reference_coverage_bed_filename: Path,
-    duplication_threshold,
     deletion_threshold,
+    duplication_threshold,
     is_reference_run=False,
 ):
 
     if not design_bed.exists():
         raise FileNotFoundError(design_bed)
 
+    if not reference_coverage_bed_filename:
+        raise ValueError(
+            "Reference coverage bed file is required, whether you wish to create one or use an existing one to call CNVs."
+        )
+
     if is_reference_run:
         if reference_coverage_bed_filename.exists():
             raise FileExistsError(reference_coverage_bed_filename)
     else:
-        if not reference_coverage_bed_filename:
-            raise ValueError(
-                "Reference coverage bed file is required for non-reference run"
-            )
         if not reference_coverage_bed_filename.exists():
             raise FileNotFoundError(reference_coverage_bed_filename)
 
@@ -158,8 +159,8 @@ def call(
             design_bed,
             workdir,
             reference_coverage_bed_filename,
-            duplication_threshold,
             deletion_threshold,
+            duplication_threshold,
             is_reference_run,
         )
 
@@ -170,8 +171,8 @@ def call(
             design_bed,
             workdir,
             reference_coverage_bed_filename,
-            duplication_threshold,
             deletion_threshold,
+            duplication_threshold,
             is_reference_run,
         )
 
@@ -260,8 +261,8 @@ def cnv_call(
     design_bed_filename,
     workdir,
     reference_coverage_bed_filename,
-    duplication_threshold,
     deletion_threshold,
+    duplication_threshold,
     is_reference_run=False,
 ):
     input_bed_filenames = "[" + ", ".join([f"'{p}'" for p in input_bed_filenames]) + "]"
@@ -304,10 +305,16 @@ def cnv_call(
         final_gene_ratio_table = pivoted_gene_ratio_table(ratio_table, ref_table)
 
         export_duckdb_table_to_excel(
-            final_amplicon_ratio_table, workdir / "amplicon_ratio.xlsx"
+            final_amplicon_ratio_table,
+            workdir / "amplicon_ratio.xlsx",
+            deletion_threshold,
+            duplication_threshold,
         )
         export_duckdb_table_to_excel(
-            final_gene_ratio_table, workdir / "gene_ratio.xlsx"
+            final_gene_ratio_table,
+            workdir / "gene_ratio.xlsx",
+            deletion_threshold,
+            duplication_threshold,
         )
 
 
