@@ -202,7 +202,7 @@ def pivoted_amplicon_ratio_table(
     return db.sql(
         f"""SELECT * EXCLUDE(index) FROM 
         (PIVOT
-            (SELECT ref_table.contig_id,ref_table.region_id,ratio_table.ratio,ratio_table.sample_name,index FROM {ref_table.sql_query()} ref_table JOIN ({ratio_table.sql_query()}) ratio_table ON ratio_table.region_id=ref_table.region_id
+            (SELECT ref_table.contig_id,ref_table.region_id,ratio_table.ratio,ratio_table.sample_name,index FROM ({ref_table.sql_query()}) ref_table JOIN ({ratio_table.sql_query()}) ratio_table ON ratio_table.region_id=ref_table.region_id
             ) ON sample_name USING first(ratio)
         ) ORDER BY index"""
     )
