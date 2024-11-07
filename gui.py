@@ -267,7 +267,6 @@ class MainWindow(qw.QMainWindow):
                 event.ignore()
 
     def on_worker_finished(self, returncode: int):
-        self._start_time = None
         if returncode != 0:
             qw.QMessageBox.critical(self, "Erreur", "Le script a échoué")
         else:
@@ -282,6 +281,7 @@ class MainWindow(qw.QMainWindow):
                 qc.QUrl.fromLocalFile(os.path.join(self._workdir, self.run_name))
             )
         self.setup_normal_mode()
+        self._start_time = None
 
     def setup_wait_mode(self):
         self._run_button.hide()
