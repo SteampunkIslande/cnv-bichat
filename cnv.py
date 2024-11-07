@@ -182,7 +182,7 @@ def build_reference_coverage_table(
     design_bed_table: db.DuckDBPyRelation,
 ):
     return db.sql(
-        f"""SELECT design_bed_table.region_id,avg(normalized_depth_table.normalized_depth),index AS avg_normalized_depth FROM ({normalized_depth_table.sql_query()}) normalized_depth_table JOIN ({design_bed_table.sql_query()}) design_bed_table ON design_bed_table.region_id=normalized_depth_table.region_id GROUP BY region_id"""
+        f"""SELECT design_bed_table.region_id,avg(normalized_depth_table.normalized_depth) AS avg_normalized_depth,index FROM ({normalized_depth_table.sql_query()}) normalized_depth_table JOIN ({design_bed_table.sql_query()}) design_bed_table ON design_bed_table.region_id=normalized_depth_table.region_id GROUP BY design_bed_table.region_id,"index" """
     )
 
 
@@ -288,7 +288,7 @@ def cnv_call(
             ref_table,
         )
         db.sql(
-            f"COPY (SELECT * EXCLUDE(index) FROM ({reference_coverage_table.sql_query()}) reference_coverage_table ORDER BY index) TO '{reference_coverage_bed_filename}' (DELIMITER '\t')"
+            f"""COPY (SELECT * EXCLUDE(index) FROM ({reference_coverage_table.sql_query()}) reference_coverage_table ORDER BY index) TO '{reference_coverage_bed_filename}' (DELIMITER '\t')"""
         )
         return 0
     else:
