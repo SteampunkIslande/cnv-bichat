@@ -106,6 +106,8 @@ class MainWindow(qw.QMainWindow):
         self._workdir = None
         self._last_file = None
 
+        self._start_time = None
+
         prefs = load_user_prefs()
         if "designbed" in prefs:
             self._design_bed = prefs["designbed"]
@@ -203,6 +205,14 @@ class MainWindow(qw.QMainWindow):
         if not self.run_name:
             return
 
+        if os.path.isdir(os.path.join(self._workdir, self.run_name)):
+            qw.QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Le répertoire de travail existe déjà. Veuillez choisir un autre nom de run.",
+            )
+            return
+
         arguments = [
             "--reference-coverage-bed",
             self._ref_bed,
@@ -230,6 +240,7 @@ class MainWindow(qw.QMainWindow):
         )
 
         self._process.start()
+        self._start_time = qc.QDateTime.currentDateTime()
 
         if self._process.waitForStarted():
             self.setup_wait_mode()
@@ -256,11 +267,16 @@ class MainWindow(qw.QMainWindow):
                 event.ignore()
 
     def on_worker_finished(self, returncode: int):
+        self._start_time = None
         if returncode != 0:
             qw.QMessageBox.critical(self, "Erreur", "Le script a échoué")
         else:
             qw.QMessageBox.information(
-                self, "Succès !", "Le script s'est terminé avec succès !"
+                self,
+                "Succès !",
+                "Le script s'est terminé avec succès !\nEn {} secondes".format(
+                    self._start_time.secsTo(qc.QDateTime.currentDateTime())
+                ),
             )
             qg.QDesktopServices.openUrl(
                 qc.QUrl.fromLocalFile(os.path.join(self._workdir, self.run_name))
