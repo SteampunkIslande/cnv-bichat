@@ -77,7 +77,9 @@ class MainWindow(qw.QMainWindow):
         self._menu_bar = self.menuBar()
         self._file_menu = self._menu_bar.addMenu("&Fichier")
 
-        self._select_refdir_action = qg.QAction("BED de référence...", self)
+        self._select_refdir_action = qg.QAction(
+            "BED de référence (témoins CNV négatifs)...", self
+        )
         self._select_refdir_action.triggered.connect(self.select_refbed)
 
         self._select_design_bed_action = qg.QAction("BED de design...", self)
@@ -96,6 +98,7 @@ class MainWindow(qw.QMainWindow):
 
         self._file_menu.addAction(self._select_refdir_action)
         self._file_menu.addAction(self._select_workdir_action)
+        self._file_menu.addAction(self._select_design_bed_action)
         self._file_menu.addAction(self.advanced_user_prefs)
 
         self._main_layout.addWidget(self._run_button)
@@ -231,12 +234,23 @@ class MainWindow(qw.QMainWindow):
         self._process.setArguments(arguments)
         self._progressbar.setRange(0, 0)
 
+        # qw.QMessageBox.information(
+        #     self,
+        #     "Running script",
+        #     "Starting process {0} with arguments {1}".format(
+        #         self._process.program(), " ".join(self._process.arguments())
+        #     ),
+        # )
+        print(
+            "Starting process {0} with arguments {1}".format(
+                self._process.program(), " ".join(self._process.arguments())
+            )
+        )
+        # Display message box with every key value pair in the arguments
         qw.QMessageBox.information(
             self,
             "Running script",
-            "Starting process {0} with arguments {1}".format(
-                self._process.program(), " ".join(self._process.arguments())
-            ),
+            f"Working directory: {self._workdir}\nRun name: {self.run_name}\nReference coverage bed: {self._ref_bed}\nDesign bed: {self._design_bed}\nInput files: {input_files}",
         )
 
         self._process.start()
