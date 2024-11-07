@@ -63,12 +63,12 @@ class MainWindow(qw.QMainWindow):
 
         self._main_layout = qw.QVBoxLayout(self._central_widget)
 
-        self._run_button = qw.QPushButton("LANCER LE SCRIPT")
-        self._run_button.setSizePolicy(
+        self._run_cnv_call_button = qw.QPushButton("Appeler les CNVs")
+        self._run_cnv_call_button.setSizePolicy(
             qw.QSizePolicy.Policy.Expanding, qw.QSizePolicy.Policy.Expanding
         )
-        self._run_button.setFont(qg.QFont("Arial", 20))
-        self._run_button.clicked.connect(self.run_cnvcall_script)
+        self._run_cnv_call_button.setFont(qg.QFont("Arial", 20))
+        self._run_cnv_call_button.clicked.connect(self.run_cnvcall_script)
 
         self._progressbar = qw.QProgressBar(self)
         self._progressbar.setRange(0, 0)
@@ -101,7 +101,7 @@ class MainWindow(qw.QMainWindow):
         self._file_menu.addAction(self._select_design_bed_action)
         self._file_menu.addAction(self.advanced_user_prefs)
 
-        self._main_layout.addWidget(self._run_button)
+        self._main_layout.addWidget(self._run_cnv_call_button)
         self._main_layout.addWidget(self._progressbar)
 
         self._design_bed = None
@@ -234,13 +234,6 @@ class MainWindow(qw.QMainWindow):
         self._process.setArguments(arguments)
         self._progressbar.setRange(0, 0)
 
-        # qw.QMessageBox.information(
-        #     self,
-        #     "Running script",
-        #     "Starting process {0} with arguments {1}".format(
-        #         self._process.program(), " ".join(self._process.arguments())
-        #     ),
-        # )
         print(
             "Starting process {0} with arguments {1}".format(
                 self._process.program(), " ".join(self._process.arguments())
@@ -251,6 +244,81 @@ class MainWindow(qw.QMainWindow):
             self,
             "Running script",
             f"Working directory: {self._workdir}\nRun name: {self.run_name}\nReference coverage bed: {self._ref_bed}\nDesign bed: {self._design_bed}\nInput files: {input_files}",
+        )
+
+        self._process.start()
+        self._start_time = qc.QDateTime.currentDateTime()
+
+        if self._process.waitForStarted():
+            self.setup_wait_mode()
+            self._process.finished.connect(self.on_worker_finished)
+        else:
+            qw.QMessageBox.critical(self, "Erreur", "Impossible de lancer le script")
+
+    def run_create_refbed(self):
+        if self._process.state() == qc.QProcess.ProcessState.Running:
+            qw.QMessageBox.information(
+                self,
+                "What?",
+                "How did you manage to run this method while the process is running? The button is supposed to be hidden!!!",
+            )
+            print("Congrats ;)")
+            return
+        if self._workdir is None:
+            self.select_workdir()
+        if self._workdir is None:
+            return
+        new_refbed, _ = qw.QFileDialog.getSaveFileName(
+            self,
+            "Enregistrer le BED de référence",
+            filter="Fichiers BED (*.bed)",
+        )
+        if self._design_bed is None:
+            self.select_design_bed()
+        if self._design_bed is None:
+            return
+
+        if not new_refbed:
+            return
+
+        input_files, _ = qw.QFileDialog.getOpenFileNames(
+            self,
+            caption="Choisissez le ou les fichiers d'entrée pour créer le BED de référence",
+            dir=self._last_file or qc.QDir().homePath(),
+            filter="Fichiers ZIP (*.zip);;Fichiers BED (*.bed)",
+        )
+
+        self.run_name = "refbed"
+
+        arguments = [
+            "--design-bed",
+            self._design_bed,
+            "--reference-coverage-bed",
+            new_refbed,
+            "--workdir",
+            os.path.join(self._workdir, "refbed"),
+            "--is-reference-run",
+            *input_files,
+        ]
+
+        if "__compiled__" in globals():
+            self._process.setProgram(sys.argv[0])
+        else:
+            self._process.setProgram(sys.executable)
+            arguments.insert(0, sys.argv[0])
+        self._process.setArguments(arguments)
+        self._progressbar.setRange(0, 0)
+
+        print(
+            "Starting process {0} with arguments {1}".format(
+                self._process.program(), " ".join(self._process.arguments())
+            )
+        )
+        # Display message box with every key value pair in the arguments
+        qw.QMessageBox.information(
+            self,
+            "Running script",
+            f"Working directory: {self._workdir}\nRun name: {self.run_name}\nOutput: {new_refbed}\nDesign bed: {self._design_bed}\nInput files: {input_files}",
         )
 
         self._process.start()
@@ -298,11 +366,11 @@ class MainWindow(qw.QMainWindow):
         self._start_time = None
 
     def setup_wait_mode(self):
-        self._run_button.hide()
+        self._run_cnv_call_button.hide()
         self._progressbar.show()
 
     def setup_normal_mode(self):
-        self._run_button.show()
+        self._run_cnv_call_button.show()
         self._progressbar.hide()
 
 
