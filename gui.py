@@ -67,8 +67,15 @@ class MainWindow(qw.QMainWindow):
         self._run_cnv_call_button.setSizePolicy(
             qw.QSizePolicy.Policy.Expanding, qw.QSizePolicy.Policy.Expanding
         )
-        self._run_cnv_call_button.setFont(qg.QFont("Arial", 20))
+        self._run_cnv_call_button.setFont(qg.QFont("Arial", 16))
         self._run_cnv_call_button.clicked.connect(self.run_cnvcall_script)
+
+        self._create_refbed_button = qw.QPushButton("Créer le BED de référence")
+        self._create_refbed_button.setSizePolicy(
+            qw.QSizePolicy.Policy.Expanding, qw.QSizePolicy.Policy.Expanding
+        )
+        self._create_refbed_button.setFont(qg.QFont("Arial", 16))
+        self._create_refbed_button.clicked.connect(self.run_create_refbed)
 
         self._progressbar = qw.QProgressBar(self)
         self._progressbar.setRange(0, 0)
@@ -102,6 +109,7 @@ class MainWindow(qw.QMainWindow):
         self._file_menu.addAction(self.advanced_user_prefs)
 
         self._main_layout.addWidget(self._run_cnv_call_button)
+        self._main_layout.addWidget(self._create_refbed_button)
         self._main_layout.addWidget(self._progressbar)
 
         self._design_bed = None
@@ -126,6 +134,8 @@ class MainWindow(qw.QMainWindow):
         self.setCentralWidget(self._central_widget)
 
         self._process = qc.QProcess(self)
+
+        self._process.finished.connect(self.on_worker_finished)
 
     def select_refbed(self):
         refbed, _ = qw.QFileDialog.getOpenFileName(
@@ -251,7 +261,6 @@ class MainWindow(qw.QMainWindow):
 
         if self._process.waitForStarted():
             self.setup_wait_mode()
-            self._process.finished.connect(self.on_worker_finished)
         else:
             qw.QMessageBox.critical(self, "Erreur", "Impossible de lancer le script")
 
@@ -326,7 +335,6 @@ class MainWindow(qw.QMainWindow):
 
         if self._process.waitForStarted():
             self.setup_wait_mode()
-            self._process.finished.connect(self.on_worker_finished)
         else:
             qw.QMessageBox.critical(self, "Erreur", "Impossible de lancer le script")
 
