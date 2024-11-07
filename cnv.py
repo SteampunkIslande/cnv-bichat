@@ -182,7 +182,7 @@ def build_reference_coverage_table(
     design_bed_table: db.DuckDBPyRelation,
 ):
     return db.sql(
-        "SELECT design_bed_table.region_id,avg(normalized_depth_table.normalized_depth),index AS avg_normalized_depth FROM normalized_depth_table JOIN design_bed_table ON design_bed_table.region_id=normalized_depth_table.region_id GROUP BY region_id"
+        f"""SELECT design_bed_table.region_id,avg(normalized_depth_table.normalized_depth),index AS avg_normalized_depth FROM ({normalized_depth_table.sql_query()}) normalized_depth_table JOIN ({design_bed_table.sql_query()}) design_bed_table ON design_bed_table.region_id=normalized_depth_table.region_id GROUP BY region_id"""
     )
 
 
@@ -191,7 +191,7 @@ def normalize_coverage_table(
     total_read_counts_per_sample: db.DuckDBPyRelation,
 ):
     return db.sql(
-        "SELECT coverage_table.*,coverage_table.total_reads / (tot.total_reads_sum - coverage_table.total_reads) AS normalized_depth FROM coverage_table JOIN total_read_counts_per_sample tot ON coverage_table.sample_name = tot.sample_name"
+        f"""SELECT coverage_table.*,coverage_table.total_reads / (tot.total_reads_sum - coverage_table.total_reads) AS normalized_depth FROM ({coverage_table.sql_query()}) coverage_table JOIN ({total_read_counts_per_sample.sql_query()}) tot ON coverage_table.sample_name = tot.sample_name"""
     )
 
 
@@ -200,9 +200,9 @@ def pivoted_amplicon_ratio_table(
     ref_table: db.DuckDBPyRelation,
 ):
     return db.sql(
-        """SELECT * EXCLUDE(index) FROM 
+        f"""SELECT * EXCLUDE(index) FROM 
         (PIVOT
-            (SELECT ref_table.contig_id,ref_table.region_id,ratio_table.ratio,ratio_table.sample_name,index FROM ref_table JOIN ratio_table on ratio_table.region_id=ref_table.region_id
+            (SELECT ref_table.contig_id,ref_table.region_id,ratio_table.ratio,ratio_table.sample_name,index FROM {ref_table.sql_query()} ref_table JOIN ({ratio_table.sql_query()}) ratio_table ON ratio_table.region_id=ref_table.region_id
             ) ON sample_name USING first(ratio)
         ) ORDER BY index"""
     )
@@ -213,7 +213,7 @@ def pivoted_gene_ratio_table(
     ref_table: db.DuckDBPyRelation,
 ):
     return db.sql(
-        "SELECT * EXCLUDE(index) FROM (SELECT contig_id,GENE,avg(COLUMNS(* EXCLUDE(GENE,contig_id,region_id))) FROM (PIVOT (SELECT ref_table.GENE,ref_table.contig_id,ref_table.region_id,ratio_table.ratio,ratio_table.sample_name,index FROM ref_table JOIN ratio_table on ratio_table.region_id=ref_table.region_id) ON sample_name USING first(ratio)) GROUP BY (GENE,contig_id)) ORDER BY index"
+        f"SELECT * EXCLUDE(index) FROM (SELECT contig_id,GENE,avg(COLUMNS(* EXCLUDE(GENE,contig_id,region_id))) FROM (PIVOT (SELECT ref_table.GENE,ref_table.contig_id,ref_table.region_id,ratio_table.ratio,ratio_table.sample_name,index FROM ({ref_table.sql_query()}) ref_table JOIN ({ratio_table.sql_query()}) ratio_table ON ratio_table.region_id=ref_table.region_id) ON sample_name USING first(ratio)) GROUP BY (GENE,contig_id)) ORDER BY index"
     )
 
 
@@ -277,7 +277,7 @@ def cnv_call(
         ref_table, cov_table, workdir / "all_samples_coverage.tsv"
     )
     total_read_counts_per_sample = db.sql(
-        "SELECT sample_name,sum(total_reads) AS total_reads_sum FROM cov_table GROUP BY sample_name"
+        f"""SELECT sample_name,sum(total_reads) AS total_reads_sum FROM ({cov_table.sql_query()}) cov_table GROUP BY sample_name"""
     )
     normalized_depth_table = normalize_coverage_table(
         cov_table, total_read_counts_per_sample
@@ -288,7 +288,7 @@ def cnv_call(
             ref_table,
         )
         db.sql(
-            f"COPY (SELECT * EXCLUDE(index) FROM reference_coverage_table ORDER BY index) TO '{reference_coverage_bed_filename}' (DELIMITER '\t')"
+            f"COPY (SELECT * EXCLUDE(index) FROM ({reference_coverage_table.sql_query()}) reference_coverage_table ORDER BY index) TO '{reference_coverage_bed_filename}' (DELIMITER '\t')"
         )
         return 0
     else:
@@ -296,7 +296,7 @@ def cnv_call(
             f"SELECT row_number() OVER () AS index,region_id,avg_normalized_depth FROM read_csv('{reference_coverage_bed_filename}',sep='\t')"
         )
         ratio_table = db.sql(
-            "SELECT reference_coverage_table.region_id,sample_name,normalized_depth/avg_normalized_depth AS ratio FROM reference_coverage_table JOIN normalized_depth_table ON reference_coverage_table.region_id=normalized_depth_table.region_id"
+            f"""SELECT reference_coverage_table.region_id,sample_name,normalized_depth/avg_normalized_depth AS ratio FROM ({reference_coverage_table.sql_query()}) reference_coverage_table JOIN ({normalized_depth_table.sql_query()}) normalized_depth_table ON reference_coverage_table.region_id=normalized_depth_table.region_id"""
         )
 
         final_amplicon_ratio_table = pivoted_amplicon_ratio_table(
@@ -345,7 +345,7 @@ def aggregate_samples_coverage(
     output_filename: Path,
 ):
     db.sql(
-        f"COPY (SELECT * EXCLUDE(index) FROM (PIVOT (SELECT ref.index,ref.GENE,ref.contig_id,ref.region_id,cov.total_reads,cov.sample_name FROM ref_table ref JOIN cov_table cov ON cov.region_id=ref.region_id) ON sample_name USING first(total_reads) ) ORDER BY index) TO '{output_filename}' (DELIMITER '\t')"
+        f"COPY (SELECT * EXCLUDE(index) FROM (PIVOT (SELECT ref.index,ref.GENE,ref.contig_id,ref.region_id,cov.total_reads,cov.sample_name FROM ({ref_table.sql_query()}) ref JOIN ({cov_table.sql_query()}) cov ON cov.region_id=ref.region_id) ON sample_name USING first(total_reads) ) ORDER BY index) TO '{output_filename}' (DELIMITER '\t')"
     )
 
 
@@ -432,7 +432,7 @@ def plot_cnv_results(
     ax = fig.add_subplot(1, 1, 1)
     data = (
         db.sql(
-            f""" SELECT {column_name},{sample_name},if({sample_name} < {deletion_threshold},'deletion',if({sample_name} >= {duplication_threshold},'duplication','normal')) as group FROM pivoted_table"""
+            f""" SELECT {column_name},{sample_name},if({sample_name} < {deletion_threshold},'deletion',if({sample_name} >= {duplication_threshold},'duplication','normal')) AS group FROM ({pivoted_table.sql_query()}) pivoted_table"""
         )
         .pl()
         .to_numpy()
