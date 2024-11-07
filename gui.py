@@ -68,7 +68,7 @@ class MainWindow(qw.QMainWindow):
             qw.QSizePolicy.Policy.Expanding, qw.QSizePolicy.Policy.Expanding
         )
         self._run_button.setFont(qg.QFont("Arial", 20))
-        self._run_button.clicked.connect(self.run_script)
+        self._run_button.clicked.connect(self.run_cnvcall_script)
 
         self._progressbar = qw.QProgressBar(self)
         self._progressbar.setRange(0, 0)
@@ -77,8 +77,11 @@ class MainWindow(qw.QMainWindow):
         self._menu_bar = self.menuBar()
         self._file_menu = self._menu_bar.addMenu("&Fichier")
 
-        self._select_refdir_action = qg.QAction("Répertoire de référence...", self)
-        self._select_refdir_action.triggered.connect(self.select_refdir)
+        self._select_refdir_action = qg.QAction("BED de référence...", self)
+        self._select_refdir_action.triggered.connect(self.select_refbed)
+
+        self._select_design_bed_action = qg.QAction("BED de design...", self)
+        self._select_design_bed_action.triggered.connect(self.select_design_bed)
 
         self._select_workdir_action = qg.QAction("Répertoire de travail...", self)
         self._select_workdir_action.triggered.connect(self.select_workdir)
@@ -98,42 +101,57 @@ class MainWindow(qw.QMainWindow):
         self._main_layout.addWidget(self._run_button)
         self._main_layout.addWidget(self._progressbar)
 
-        self._refdir = None
+        self._design_bed = None
+        self._ref_bed = None
         self._workdir = None
-        self._last_zip = None
+        self._last_file = None
 
         prefs = load_user_prefs()
-        if "refdir" in prefs:
-            self._refdir = prefs["refdir"]
+        if "designbed" in prefs:
+            self._design_bed = prefs["designbed"]
+        if "refbed" in prefs:
+            self._ref_bed = prefs["refbed"]
         if "workdir" in prefs:
             self._workdir = prefs["workdir"]
-        if "last_zip" in prefs:
-            self._last_zip = prefs["last_zip"]
+        if "last_file" in prefs:
+            self._last_file = prefs["last_file"]
 
         self.setup_normal_mode()
 
         self.setCentralWidget(self._central_widget)
 
         self._process = qc.QProcess(self)
-        self._process.readyReadStandardOutput.connect(
-            self.on_ready_read_standard_output
-        )
 
-    def on_ready_read_standard_output(self):
-        print("Ready read standard output")
-
-    def select_refdir(self):
-        refdir = qw.QFileDialog.getExistingDirectory(
-            self, "Choisissez le répertoire de référence"
+    def select_refbed(self):
+        refbed, _ = qw.QFileDialog.getOpenFileName(
+            self,
+            "Choisissez le BED de référence (témoin CNV)",
+            filter="Fichiers BED (*.bed)",
         )
-        if refdir and os.path.isdir(refdir):
-            self._refdir = refdir
-            save_user_prefs({"refdir": refdir})
+        if refbed and os.path.isfile(refbed):
+            self._ref_bed = refbed
+            save_user_prefs({"refbed": refbed})
         else:
             qw.QMessageBox.information(
                 self,
                 "Erreur",
-                f"Répertoire de référence invalide. L'emplacement du dossier de référence n'a pas été modifié. ({self._refdir})",
+                f"Répertoire de référence invalide. L'emplacement du dossier de référence n'a pas été modifié. ({self._ref_bed})",
+            )
+
+    def select_design_bed(self):
+        designbed, _ = qw.QFileDialog.getOpenFileName(
+            self,
+            "Choisissez le BED de design",
+            filter="Fichiers BED (*.bed)",
+        )
+        if designbed and os.path.isfile(designbed):
+            self._design_bed = designbed
+            save_user_prefs({"designbed": designbed})
+        else:
+            qw.QMessageBox.information(
+                self,
+                "Erreur",
+                f"Répertoire de design invalide. L'emplacement du dossier de design n'a pas été modifié. ({self._design_bed})",
             )
 
     def select_workdir(self):
@@ -150,7 +168,7 @@ class MainWindow(qw.QMainWindow):
                 f"Répertoire de travail invalide. L'emplacement du dossier de travail n'a pas été modifié. ({self._workdir})",
             )
 
-    def run_script(self):
+    def run_cnvcall_script(self):
         if self._process.state() == qc.QProcess.ProcessState.Running:
             qw.QMessageBox.information(
                 self,
@@ -159,23 +177,25 @@ class MainWindow(qw.QMainWindow):
             )
             print("Congrats ;)")
             return
-        if self._refdir is None:
-            self.select_refdir()
+        if self._ref_bed is None:
+            self.select_refbed()
         if self._workdir is None:
             self.select_workdir()
-        if self._refdir is None or self._workdir is None:
+        if self._design_bed is None:
+            self.select_design_bed()
+        if self._ref_bed is None or self._workdir is None or self._design_bed is None:
             return
         # Prompt for an existing ZIP file
-        input_zip, _ = qw.QFileDialog.getOpenFileName(
+        input_files, _ = qw.QFileDialog.getOpenFileNames(
             self,
-            caption="Choisissez le fichier ZIP de sortie de Genexus",
-            dir=self._last_zip or qc.QDir().homePath(),
-            filter="Fichiers ZIP (*.zip)",
+            caption="Choisissez le ou les fichiers d'entrée",
+            dir=self._last_file or qc.QDir().homePath(),
+            filter="Fichiers ZIP (*.zip);;Fichiers BED (*.bed)",
         )
-        if not input_zip or not os.path.isfile(input_zip):
+        if not input_files:
             return
-        self._last_zip = input_zip
-        save_user_prefs({"last_zip": input_zip})
+        self._last_file = input_files[0]
+        save_user_prefs({"last_file": self._last_file})
 
         self.run_name, _ = qw.QInputDialog.getText(
             self, "Nom du run", "Veuillez entrer le nom du run"
@@ -184,11 +204,13 @@ class MainWindow(qw.QMainWindow):
             return
 
         arguments = [
-            "--refdir",
-            self._refdir,
+            "--reference-coverage-bed",
+            self._ref_bed,
+            "--design-bed",
+            self._design_bed,
             "--workdir",
             os.path.join(self._workdir, self.run_name),
-            input_zip,
+            *input_files,
         ]
 
         if "__compiled__" in globals():

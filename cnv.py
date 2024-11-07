@@ -428,8 +428,6 @@ def plot_cnv_results(
 
     import matplotlib.pyplot as plt
 
-    unquoted_sample_name = sample_name.replace('"', "")
-
     fig = plt.figure()
     ax = fig.add_subplot(1, 1, 1)
     data = (
@@ -480,7 +478,7 @@ def plot_cnv_results(
     plt.autoscale()
 
     buf = io.BytesIO()
-    plt.savefig(buf, format="png")
+    plt.savefig(buf, format="png", bbox_inches="tight")
     buf.seek(0)
     result = base64.b64encode(buf.read()).decode("utf-8")
     plt.close()
