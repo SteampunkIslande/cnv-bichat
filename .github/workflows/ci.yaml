@@ -39,7 +39,8 @@ jobs:
           script-name: cnv.py
           onefile: true
           enable-plugins: pyside6
-          include-package: polars,pyarrow,duckdb,matplotlib,xlsxwriter
+          include-module: polars,pyarrow,duckdb,matplotlib,xlsxwriter
+          nofollow-import-to: ipython
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v3
