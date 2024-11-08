@@ -429,6 +429,7 @@ def plot_cnv_results(
     import matplotlib.pyplot as plt
 
     fig = plt.figure()
+    fig.set_size_inches(20, 5)
     ax = fig.add_subplot(1, 1, 1)
     data = (
         db.sql(

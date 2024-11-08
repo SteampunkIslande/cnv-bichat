@@ -7,6 +7,13 @@ template = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CNV Report</title>
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .scrollable {
+            overflow: auto;
+            width: 100%;
+            height: 600px;
+        }
+    </style>
 </head>
 
 <body>
@@ -47,7 +54,9 @@ template = """
                     {% endif %}
                 </ul>
                 <h4>Graphe correspondant</h4>
-                <img src='data:image/png;base64,{{ sample_data.graph }}' alt='graph'>
+                <div class="scrollable">
+                    <img src='data:image/png;base64,{{ sample_data.graph }}' alt='graph'>
+                </div>
             </div>
             {% endfor %}
         </div>

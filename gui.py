@@ -375,10 +375,12 @@ class MainWindow(qw.QMainWindow):
 
     def setup_wait_mode(self):
         self._run_cnv_call_button.hide()
+        self._create_refbed_button.hide()
         self._progressbar.show()
 
     def setup_normal_mode(self):
         self._run_cnv_call_button.show()
+        self._create_refbed_button.show()
         self._progressbar.hide()
 
 
